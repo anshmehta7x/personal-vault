@@ -1,0 +1,10 @@
+.env
+.env.*
+!.env.example
+.next/
+node_modules/
+.vercel/
+.superpowers/
+coverage/
+playwright-report/
+test-results/
