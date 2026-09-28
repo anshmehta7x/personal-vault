@@ -1,0 +1,180 @@
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+import { Cloud, CloudOff, LockKeyhole, LogOut, Menu, Plus, ShieldCheck } from "lucide-react";
+
+import { useVault } from "@/hooks/use-vault";
+import { authClient } from "@/lib/auth/client";
+import type { VaultItem } from "@/types/vault";
+
+import { ItemDetail } from "./item-detail";
+import { ItemEditor } from "./item-editor";
+import { ItemList } from "./item-list";
+import { UnlockScreen } from "./unlock-screen";
+import { VaultFilter, VaultSidebar } from "./vault-sidebar";
+import styles from "./vault.module.css";
+
+export function VaultApp() {
+  const vault = useVault();
+  const [activeFilter, setActiveFilter] = useState<VaultFilter>("all");
+  const [query, setQuery] = useState("");
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [editorItem, setEditorItem] = useState<VaultItem | null>(null);
+  const [isEditorOpen, setIsEditorOpen] = useState(false);
+  const [showMobileDetail, setShowMobileDetail] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  const visibleItems = useMemo(() => {
+    const normalizedQuery = query.trim().toLowerCase();
+    return (vault.data?.items ?? [])
+      .filter((item) => activeFilter === "trash" ? Boolean(item.deletedAt) : !item.deletedAt)
+      .filter((item) => (
+        activeFilter === "all" || activeFilter === "trash" || item.category === activeFilter
+      ))
+      .filter((item) => {
+        if (!normalizedQuery) {
+          return true;
+        }
+        const searchText = [
+          item.title,
+          item.notes,
+          ...item.fields.flatMap((field) => [field.label, field.value]),
+          ...item.documents.map((document) => document.name),
+        ].join(" ").toLowerCase();
+        return searchText.includes(normalizedQuery);
+      })
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  }, [activeFilter, query, vault.data?.items]);
+
+  useEffect(() => {
+    if (!visibleItems.some((item) => item.id === selectedId)) {
+      setSelectedId(visibleItems[0]?.id ?? null);
+    }
+  }, [selectedId, visibleItems]);
+
+  if (vault.status === "loading") {
+    return <main className={styles.loadingPage}><ShieldCheck size={30} /><span>Opening Locker…</span></main>;
+  }
+
+  if (vault.status === "new" || vault.status === "locked") {
+    return (
+      <UnlockScreen
+        error={vault.error}
+        isNew={vault.status === "new"}
+        onSetup={vault.setup}
+        onUnlock={vault.unlock}
+      />
+    );
+  }
+
+  const selectedItem = visibleItems.find((item) => item.id === selectedId) ?? null;
+
+  function openNewItem(): void {
+    setEditorItem(null);
+    setIsEditorOpen(true);
+  }
+
+  async function saveItem(item: VaultItem): Promise<void> {
+    await vault.saveItem(item);
+    setSelectedId(item.id);
+    setIsEditorOpen(false);
+    setShowMobileDetail(true);
+  }
+
+  async function signOut(): Promise<void> {
+    vault.lock();
+    await authClient.signOut();
+    window.location.assign("/auth");
+  }
+
+  async function permanentlyDelete(id: string): Promise<void> {
+    if (!window.confirm("Delete this item and its documents forever?")) {
+      return;
+    }
+    await vault.permanentlyDelete(id);
+    setShowMobileDetail(false);
+  }
+
+  return (
+    <main className={styles.appShell}>
+      <div className={styles.mobileTopbar}>
+        <button aria-label="Open navigation" onClick={() => setSidebarOpen(true)} type="button">
+          <Menu size={21} />
+        </button>
+        <strong>Locker</strong>
+        <button aria-label="Add new item" onClick={openNewItem} type="button"><Plus size={21} /></button>
+      </div>
+
+      <div
+        className={`${styles.sidebarWrap} ${sidebarOpen ? styles.sidebarOpen : ""}`}
+        onClick={() => setSidebarOpen(false)}
+        role="presentation"
+      >
+        <div onClick={(event) => event.stopPropagation()} role="presentation">
+          <VaultSidebar
+            activeFilter={activeFilter}
+            items={vault.data?.items ?? []}
+            onAdd={openNewItem}
+            onFilter={(filter) => {
+              setActiveFilter(filter);
+              setSidebarOpen(false);
+              setShowMobileDetail(false);
+            }}
+          />
+          <div className={styles.sidebarFooter}>
+            <span>
+              {vault.syncStatus === "offline" ? <CloudOff size={15} /> : <Cloud size={15} />}
+              {vault.syncStatus === "syncing"
+                ? "Syncing encrypted data"
+                : vault.syncStatus === "synced"
+                  ? "Encrypted cloud sync"
+                  : "Saved locally · offline"}
+            </span>
+            <button onClick={vault.lock} type="button"><LockKeyhole size={16} /> Lock vault</button>
+            <button onClick={signOut} type="button"><LogOut size={16} /> Sign out</button>
+          </div>
+        </div>
+      </div>
+
+      <div className={`${styles.workspace} ${showMobileDetail ? styles.mobileDetailOpen : ""}`}>
+        <ItemList
+          items={visibleItems}
+          onQueryChange={setQuery}
+          onSelect={(id) => {
+            setSelectedId(id);
+            setShowMobileDetail(true);
+          }}
+          query={query}
+          selectedId={selectedId}
+        />
+        <ItemDetail
+          item={selectedItem}
+          onBack={() => setShowMobileDetail(false)}
+          onDelete={async (id) => {
+            await vault.moveToTrash(id);
+            setShowMobileDetail(false);
+          }}
+          onDownload={vault.downloadDocument}
+          onEdit={(item) => {
+            setEditorItem(item);
+            setIsEditorOpen(true);
+          }}
+          onPermanentDelete={permanentlyDelete}
+          onRestore={async (id) => {
+            await vault.restoreItem(id);
+            setShowMobileDetail(false);
+          }}
+        />
+      </div>
+
+      {isEditorOpen ? (
+        <ItemEditor
+          item={editorItem}
+          onAddDocument={vault.addDocument}
+          onClose={() => setIsEditorOpen(false)}
+          onSave={saveItem}
+        />
+      ) : null}
+    </main>
+  );
+}

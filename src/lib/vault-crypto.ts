@@ -1,0 +1,167 @@
+import { argon2id } from "hash-wasm";
+
+import type { VaultData, VaultRecord } from "@/types/vault";
+
+const encoder = new TextEncoder();
+const decoder = new TextDecoder();
+const WRAP_CONTEXT = encoder.encode("locker:v1:vault-key");
+const DATA_CONTEXT = encoder.encode("locker:v1:vault-data");
+
+export function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+  }
+  return btoa(binary);
+}
+
+export function base64ToBytes(value: string): Uint8Array<ArrayBuffer> {
+  const binary = atob(value);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes;
+}
+
+function randomBytes(length: number): Uint8Array<ArrayBuffer> {
+  return crypto.getRandomValues(new Uint8Array(length));
+}
+
+async function derivePassphraseKey(passphrase: string, salt: Uint8Array): Promise<CryptoKey> {
+  const keyBytes = await argon2id({
+    password: passphrase,
+    salt,
+    iterations: 3,
+    parallelism: 1,
+    memorySize: 64 * 1024,
+    hashLength: 32,
+    outputType: "binary",
+  });
+  return crypto.subtle.importKey("raw", Uint8Array.from(keyBytes), "AES-GCM", false, [
+    "encrypt",
+    "decrypt",
+  ]);
+}
+
+async function encrypt(
+  key: CryptoKey,
+  value: BufferSource,
+  context: Uint8Array<ArrayBuffer>,
+): Promise<{ cipherText: string; iv: string }> {
+  const iv = randomBytes(12);
+  const result = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv, additionalData: context },
+    key,
+    value,
+  );
+  return {
+    cipherText: bytesToBase64(new Uint8Array(result)),
+    iv: bytesToBase64(iv),
+  };
+}
+
+async function decrypt(
+  key: CryptoKey,
+  cipherText: string,
+  iv: string,
+  context: Uint8Array<ArrayBuffer>,
+): Promise<ArrayBuffer> {
+  return crypto.subtle.decrypt(
+    { name: "AES-GCM", iv: base64ToBytes(iv), additionalData: context },
+    key,
+    base64ToBytes(cipherText),
+  );
+}
+
+async function encryptData(key: CryptoKey, data: VaultData) {
+  return encrypt(key, encoder.encode(JSON.stringify(data)), DATA_CONTEXT);
+}
+
+export async function createVault(passphrase: string): Promise<{
+  data: VaultData;
+  key: CryptoKey;
+  record: VaultRecord;
+}> {
+  const salt = randomBytes(16);
+  const passphraseKey = await derivePassphraseKey(passphrase, salt);
+  const key = await crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, true, [
+    "encrypt",
+    "decrypt",
+  ]);
+  const rawKey = await crypto.subtle.exportKey("raw", key);
+  const wrapped = await encrypt(passphraseKey, rawKey, WRAP_CONTEXT);
+  const data: VaultData = { items: [] };
+  const encrypted = await encryptData(key, data);
+
+  return {
+    data,
+    key,
+    record: {
+      version: 1,
+      updatedAt: new Date().toISOString(),
+      salt: bytesToBase64(salt),
+      wrapIv: wrapped.iv,
+      wrappedKey: wrapped.cipherText,
+      dataIv: encrypted.iv,
+      encryptedData: encrypted.cipherText,
+    },
+  };
+}
+
+export async function unlockVault(
+  record: VaultRecord,
+  passphrase: string,
+): Promise<{ data: VaultData; key: CryptoKey }> {
+  const passphraseKey = await derivePassphraseKey(passphrase, base64ToBytes(record.salt));
+  const rawKey = await decrypt(
+    passphraseKey,
+    record.wrappedKey,
+    record.wrapIv,
+    WRAP_CONTEXT,
+  );
+  const key = await crypto.subtle.importKey("raw", rawKey, "AES-GCM", true, [
+    "encrypt",
+    "decrypt",
+  ]);
+  const plainText = await decrypt(
+    key,
+    record.encryptedData,
+    record.dataIv,
+    DATA_CONTEXT,
+  );
+  const data = JSON.parse(decoder.decode(plainText)) as VaultData;
+  return { data, key };
+}
+
+export async function sealVault(
+  record: VaultRecord,
+  key: CryptoKey,
+  data: VaultData,
+): Promise<VaultRecord> {
+  const encrypted = await encryptData(key, data);
+  return {
+    ...record,
+    updatedAt: new Date().toISOString(),
+    dataIv: encrypted.iv,
+    encryptedData: encrypted.cipherText,
+  };
+}
+
+export async function encryptDocument(
+  key: CryptoKey,
+  data: ArrayBuffer,
+): Promise<{ encrypted: ArrayBuffer; iv: Uint8Array<ArrayBuffer> }> {
+  const iv = randomBytes(12);
+  const encrypted = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, data);
+  return { encrypted, iv };
+}
+
+export async function decryptDocument(
+  key: CryptoKey,
+  encrypted: ArrayBuffer,
+  iv: Uint8Array<ArrayBuffer>,
+): Promise<ArrayBuffer> {
+  return crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, encrypted);
+}
