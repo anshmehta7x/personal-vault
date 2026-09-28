@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { auth } from "@/lib/auth/server";
+import { getAuthenticatedUserId } from "@/lib/auth/server";
 import { sql } from "@/lib/database";
 
 const vaultRecordSchema = z.object({
@@ -13,13 +13,8 @@ const vaultRecordSchema = z.object({
   encryptedData: z.string().min(1),
 });
 
-async function getUserId(): Promise<string | null> {
-  const { data: session } = await auth.getSession();
-  return session?.user.id ?? null;
-}
-
-export async function GET(): Promise<Response> {
-  const userId = await getUserId();
+export async function GET(request: Request): Promise<Response> {
+  const userId = await getAuthenticatedUserId(request);
   if (!userId) {
     return Response.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -35,7 +30,7 @@ export async function GET(): Promise<Response> {
 }
 
 export async function PUT(request: Request): Promise<Response> {
-  const userId = await getUserId();
+  const userId = await getAuthenticatedUserId(request);
   if (!userId) {
     return Response.json({ error: "Unauthorized" }, { status: 401 });
   }

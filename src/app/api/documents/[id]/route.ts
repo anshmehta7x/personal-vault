@@ -7,7 +7,7 @@ import {
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
-import { auth } from "@/lib/auth/server";
+import { getAuthenticatedUserId } from "@/lib/auth/server";
 import { storage, VAULT_BUCKET } from "@/lib/object-storage";
 
 interface RouteContext {
@@ -16,18 +16,18 @@ interface RouteContext {
 
 const ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-async function getObjectKey(context: RouteContext): Promise<string | null> {
-  const { data: session } = await auth.getSession();
+async function getObjectKey(request: Request, context: RouteContext): Promise<string | null> {
+  const userId = await getAuthenticatedUserId(request);
   const { id } = await context.params;
-  if (!session?.user.id || !ID_PATTERN.test(id)) {
+  if (!userId || !ID_PATTERN.test(id)) {
     return null;
   }
-  const owner = createHash("sha256").update(session.user.id).digest("hex");
+  const owner = createHash("sha256").update(userId).digest("hex");
   return `users/${owner}/${id}.encrypted`;
 }
 
-export async function POST(_request: Request, context: RouteContext): Promise<Response> {
-  const objectKey = await getObjectKey(context);
+export async function POST(request: Request, context: RouteContext): Promise<Response> {
+  const objectKey = await getObjectKey(request, context);
   if (!objectKey) {
     return Response.json({ error: "Unauthorized or invalid document" }, { status: 401 });
   }
@@ -43,8 +43,8 @@ export async function POST(_request: Request, context: RouteContext): Promise<Re
   return Response.json({ uploadUrl });
 }
 
-export async function GET(_request: Request, context: RouteContext): Promise<Response> {
-  const objectKey = await getObjectKey(context);
+export async function GET(request: Request, context: RouteContext): Promise<Response> {
+  const objectKey = await getObjectKey(request, context);
   if (!objectKey) {
     return Response.json({ error: "Unauthorized or invalid document" }, { status: 401 });
   }
@@ -56,8 +56,8 @@ export async function GET(_request: Request, context: RouteContext): Promise<Res
   return Response.json({ downloadUrl }, { headers: { "Cache-Control": "no-store" } });
 }
 
-export async function DELETE(_request: Request, context: RouteContext): Promise<Response> {
-  const objectKey = await getObjectKey(context);
+export async function DELETE(request: Request, context: RouteContext): Promise<Response> {
+  const objectKey = await getObjectKey(request, context);
   if (!objectKey) {
     return Response.json({ error: "Unauthorized or invalid document" }, { status: 401 });
   }

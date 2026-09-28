@@ -5,7 +5,9 @@ notes, and documents.
 
 ## Current prototype
 
-- Neon Auth account login
+- Self-managed Better Auth account login
+- WebAuthn passkeys and physical FIDO2 security keys
+- Password fallback for recovery
 - Separate vault passphrase using Argon2id
 - AES-256-GCM encryption in the browser
 - Flexible records with templates, custom sensitive fields, and notes
@@ -28,27 +30,33 @@ neon env pull
 npm run dev
 ```
 
-Add `NEON_AUTH_COOKIE_SECRET` to `.env.local` using a 32+ character random secret:
+Add `BETTER_AUTH_SECRET` to `.env.local` using a 32+ character random secret:
 
 ```bash
 openssl rand -base64 32
 ```
 
-Apply the database migration once:
+Generate a separate `VAULT_SETUP_KEY` the same way. It is required only when creating
+the one allowed owner account, preventing somebody else from claiming a fresh deployment.
+
+Apply the database migrations once:
 
 ```bash
 neon psql production -- -v ON_ERROR_STOP=1 -f migrations/0001_create_vaults.sql
+neon psql production -- -v ON_ERROR_STOP=1 -f migrations/0002_better_auth.sql
 ```
 
 ## Deploy to Vercel
 
 Import the private GitHub repository into Vercel and copy the variables listed in
 `.env.example` into the Vercel project. Use a new production-only
-`NEON_AUTH_COOKIE_SECRET`; do not copy it into source control.
+`BETTER_AUTH_SECRET`; do not copy it into source control. Set the auth URL and origin
+to the stable production HTTPS URL, and set the RP ID to the same hostname without
+the scheme.
 
 ## Prototype security status
 
-This is not ready for irreplaceable secrets yet. Passkey/hardware-key login, recovery
-kit support, single-owner signup closure, stronger CSP hardening, and an external
-security review remain before production use. Managed Neon Auth currently provides the
-account login; the separate vault passphrase is already required for decryption.
+This is not ready for irreplaceable secrets yet. Recovery-kit support, stronger CSP
+hardening, account recovery UX, and an external security review remain before production
+use. The database enforces one owner. Passkey/hardware-key authentication and the
+separate vault decryption passphrase are implemented.

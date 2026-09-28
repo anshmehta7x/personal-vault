@@ -1,7 +1,18 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { Cloud, CloudOff, LockKeyhole, LogOut, Menu, Plus, ShieldCheck } from "lucide-react";
+import { useMemo, useState } from "react";
+import {
+  Cloud,
+  CloudOff,
+  Fingerprint,
+  LockKeyhole,
+  LogOut,
+  Menu,
+  Plus,
+  ShieldCheck,
+  Usb,
+} from "lucide-react";
+import { useRouter } from "next/navigation";
 
 import { useVault } from "@/hooks/use-vault";
 import { authClient } from "@/lib/auth/client";
@@ -15,6 +26,7 @@ import { VaultFilter, VaultSidebar } from "./vault-sidebar";
 import styles from "./vault.module.css";
 
 export function VaultApp() {
+  const router = useRouter();
   const vault = useVault();
   const [activeFilter, setActiveFilter] = useState<VaultFilter>("all");
   const [query, setQuery] = useState("");
@@ -23,6 +35,7 @@ export function VaultApp() {
   const [isEditorOpen, setIsEditorOpen] = useState(false);
   const [showMobileDetail, setShowMobileDetail] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [securityNotice, setSecurityNotice] = useState("");
 
   const visibleItems = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
@@ -46,11 +59,9 @@ export function VaultApp() {
       .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   }, [activeFilter, query, vault.data?.items]);
 
-  useEffect(() => {
-    if (!visibleItems.some((item) => item.id === selectedId)) {
-      setSelectedId(visibleItems[0]?.id ?? null);
-    }
-  }, [selectedId, visibleItems]);
+  const effectiveSelectedId = visibleItems.some((item) => item.id === selectedId)
+    ? selectedId
+    : visibleItems[0]?.id ?? null;
 
   if (vault.status === "loading") {
     return <main className={styles.loadingPage}><ShieldCheck size={30} /><span>Opening Locker…</span></main>;
@@ -67,7 +78,7 @@ export function VaultApp() {
     );
   }
 
-  const selectedItem = visibleItems.find((item) => item.id === selectedId) ?? null;
+  const selectedItem = visibleItems.find((item) => item.id === effectiveSelectedId) ?? null;
 
   function openNewItem(): void {
     setEditorItem(null);
@@ -84,7 +95,18 @@ export function VaultApp() {
   async function signOut(): Promise<void> {
     vault.lock();
     await authClient.signOut();
-    window.location.assign("/auth");
+    router.push("/auth");
+  }
+
+  async function registerPasskey(type: "platform" | "cross-platform"): Promise<void> {
+    setSecurityNotice("Waiting for your authenticator…");
+    const result = await authClient.passkey.addPasskey({
+      name: type === "platform" ? "Personal device" : "Hardware security key",
+      authenticatorAttachment: type,
+    });
+    setSecurityNotice(result.error
+      ? result.error.message ?? "Could not add the passkey."
+      : "Passkey added.");
   }
 
   async function permanentlyDelete(id: string): Promise<void> {
@@ -130,6 +152,13 @@ export function VaultApp() {
                   ? "Encrypted cloud sync"
                   : "Saved locally · offline"}
             </span>
+            <button onClick={() => registerPasskey("platform")} type="button">
+              <Fingerprint size={16} /> Add device passkey
+            </button>
+            <button onClick={() => registerPasskey("cross-platform")} type="button">
+              <Usb size={16} /> Add security key
+            </button>
+            {securityNotice ? <p className={styles.securityNotice}>{securityNotice}</p> : null}
             <button onClick={vault.lock} type="button"><LockKeyhole size={16} /> Lock vault</button>
             <button onClick={signOut} type="button"><LogOut size={16} /> Sign out</button>
           </div>
@@ -145,7 +174,7 @@ export function VaultApp() {
             setShowMobileDetail(true);
           }}
           query={query}
-          selectedId={selectedId}
+          selectedId={effectiveSelectedId}
         />
         <ItemDetail
           item={selectedItem}
