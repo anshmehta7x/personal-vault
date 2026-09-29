@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { MAX_DOCUMENT_BYTES } from "@/lib/document-limits";
 import {
   createVault,
   decryptVaultItem,
@@ -42,7 +43,6 @@ import type {
 type VaultStatus = "loading" | "new" | "locked" | "unlocked" | "unavailable";
 type SyncStatus = "syncing" | "synced" | "offline";
 
-const MAX_FILE_SIZE = 25 * 1024 * 1024;
 const AUTO_LOCK_MS = 10 * 60 * 1000;
 const MAX_HYDRATE_RETRIES = 3;
 const TRASH_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
@@ -380,7 +380,7 @@ export function useVault(userId: string, onSessionExpired: () => void) {
     if (!key) {
       throw new Error("Vault is locked.");
     }
-    if (file.size > MAX_FILE_SIZE) {
+    if (file.size > MAX_DOCUMENT_BYTES) {
       throw new Error("Documents must be 25 MB or smaller.");
     }
     const id = crypto.randomUUID();

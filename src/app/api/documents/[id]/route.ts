@@ -6,13 +6,19 @@ import {
   PutObjectCommand,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { z } from "zod";
 
 import { getAuthenticatedUserId } from "@/lib/auth/server";
+import { MAX_ENCRYPTED_DOCUMENT_BYTES } from "@/lib/document-limits";
 import { storage, VAULT_BUCKET } from "@/lib/object-storage";
 
 interface RouteContext {
   params: Promise<{ id: string }>;
 }
+
+const uploadRequestSchema = z.object({
+  size: z.number().int().positive().max(MAX_ENCRYPTED_DOCUMENT_BYTES),
+}).strict();
 
 const ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -31,12 +37,18 @@ export async function POST(request: Request, context: RouteContext): Promise<Res
   if (!objectKey) {
     return Response.json({ error: "Unauthorized or invalid document" }, { status: 401 });
   }
+  const result = uploadRequestSchema.safeParse(await request.json().catch(() => null));
+  if (!result.success) {
+    return Response.json({ error: "Documents must be 25 MB or smaller" }, { status: 400 });
+  }
+  // Signing the exact length makes storage reject any upload of a different size.
   const uploadUrl = await getSignedUrl(
     storage,
     new PutObjectCommand({
       Bucket: VAULT_BUCKET,
       Key: objectKey,
       ContentType: "application/octet-stream",
+      ContentLength: result.data.size,
     }),
     { expiresIn: 300 },
   );

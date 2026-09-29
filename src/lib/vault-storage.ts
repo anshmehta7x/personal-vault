@@ -159,7 +159,11 @@ export async function storeEncryptedDocument(
   key: CryptoKey,
 ): Promise<string> {
   const { encrypted, iv } = await encryptDocument(key, await file.arrayBuffer());
-  const signingResponse = await fetch(`/api/documents/${id}`, { method: "POST" });
+  const signingResponse = await fetch(`/api/documents/${id}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ size: encrypted.byteLength }),
+  });
   throwIfSessionExpired(signingResponse);
   if (!signingResponse.ok) {
     throw new Error("Could not prepare the private document upload.");
