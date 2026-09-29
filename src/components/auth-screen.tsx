@@ -95,9 +95,9 @@ export function AuthScreen() {
           {needsPasskey ? (
             <>
               <p className={styles.eyebrow}>Account created</p>
-              <h2>Add your passkey</h2>
+              <h2>Add a passkey</h2>
               <p className={styles.subtle}>
-                Choose this device&apos;s passkey or a physical FIDO2 security key.
+                Optionally add this device&apos;s passkey or a physical FIDO2 security key.
               </p>
               <div className={styles.passkeyChoices}>
                 <button
@@ -124,7 +124,15 @@ export function AuthScreen() {
                 </button>
               </div>
               {error ? <p className={styles.error}>{error}</p> : null}
-              <p className={styles.setupNote}>Add a passkey to continue to the vault.</p>
+              <button
+                className={styles.switcher}
+                disabled={isSubmitting}
+                onClick={() => router.push("/vault")}
+                type="button"
+              >
+                Continue without a passkey
+              </button>
+              <p className={styles.setupNote}>You can add a passkey later from the vault.</p>
             </>
           ) : (
             <>
@@ -132,7 +140,7 @@ export function AuthScreen() {
               <h2>{isSignUp ? "Create your account" : "Welcome back"}</h2>
               <p className={styles.subtle}>
                 {isSignUp
-                  ? "This vault is intended for one owner."
+                  ? "Create an account with its own encrypted vault."
                   : "Sign in to reach your encrypted vault."}
               </p>
 
@@ -174,7 +182,7 @@ export function AuthScreen() {
                 </label>
                 {isSignUp ? (
                   <label>
-                    One-time setup key
+                    Vault setup key
                     <input
                       autoComplete="off"
                       onChange={(event) => setSetupKey(event.target.value)}
@@ -197,7 +205,7 @@ export function AuthScreen() {
               >
                 {isSignUp
                   ? "Already have an account? Sign in"
-                  : "First time here? Create the account"}
+                  : "First time here? Create an account"}
               </button>
             </>
           )}

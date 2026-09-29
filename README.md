@@ -81,7 +81,7 @@ Account creation requires the deployment's setup key. To request access, contact
 
 1. Open the hosted Locker deployment and select **Create account**.
 2. Enter your email, account password, and the provided setup key.
-3. Register a device passkey or physical FIDO2 security key.
+3. Optionally register a device passkey or physical FIDO2 security key.
 4. Create a separate vault passphrase and store it in a password manager.
 
 The setup key authorizes account creation only; it cannot decrypt a vault. It is reusable while
@@ -149,15 +149,7 @@ Run locally:
 npm run dev
 ```
 
-### Account policy
-
-Migration `0002_better_auth.sql` defaults a new installation to one account. To allow multiple
-accounts, remove the database guard:
-
-```sql
-DROP TRIGGER IF EXISTS enforce_single_vault_owner_before_insert ON "user";
-DROP FUNCTION IF EXISTS enforce_single_vault_owner();
-```
+### Registration
 
 While `VAULT_SETUP_KEY` is configured, anyone who knows it can register. Remove the variable and
 redeploy to close registration. Re-add or rotate it for a later onboarding window.

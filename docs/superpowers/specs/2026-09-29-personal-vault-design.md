@@ -6,7 +6,7 @@
 
 ## 1. Purpose
 
-Build a private, single-user web vault for identity records, personal information,
+Build a private web vault for identity records, personal information,
 bank-account details, notes, and documents. It should make frequently used values easy to
 find, reveal, copy, preview, and download from Windows, Linux, and iPhone without exposing
 plaintext vault content to Vercel, Neon, or a database/storage breach.
@@ -25,7 +25,7 @@ Success means:
 
 ### Included
 
-- One owner account; no public registration.
+- Independent user accounts with setup-key-gated registration.
 - Platform passkeys and cross-platform FIDO2 hardware security keys.
 - A separate vault passphrase and offline recovery kit.
 - Flexible entries with an optional title, arbitrary fields, sensitive/masked fields,
@@ -40,7 +40,7 @@ Success means:
 
 ### Excluded from the first version
 
-- Family accounts, sharing, organizations, or multi-user access.
+- Family accounts, vault sharing, or organizations.
 - Browser extensions, autofill, OCR, offline mode, and native applications.
 - Encrypted archive export/import or independent backup storage.
 - Password, PIN, OTP, or CVV templates. Arbitrary encrypted fields and notes remain
