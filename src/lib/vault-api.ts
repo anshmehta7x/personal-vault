@@ -10,8 +10,22 @@ export class VaultAlreadyExistsError extends Error {
   }
 }
 
+export class SessionExpiredError extends Error {
+  constructor() {
+    super("Your session has expired. Sign in again.");
+    this.name = "SessionExpiredError";
+  }
+}
+
+export function throwIfSessionExpired(response: Response): void {
+  if (response.status === 401) {
+    throw new SessionExpiredError();
+  }
+}
+
 export async function getCloudVaultKeyEnvelope(): Promise<VaultKeyEnvelope | null> {
   const response = await fetch("/api/vault", { cache: "no-store" });
+  throwIfSessionExpired(response);
   if (!response.ok) {
     throw new Error("Could not load the cloud vault.");
   }
@@ -25,6 +39,7 @@ export async function storeCloudVaultKeyEnvelope(envelope: VaultKeyEnvelope): Pr
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(envelope),
   });
+  throwIfSessionExpired(response);
   if (response.status === 409) {
     throw new VaultAlreadyExistsError();
   }
@@ -35,6 +50,7 @@ export async function storeCloudVaultKeyEnvelope(envelope: VaultKeyEnvelope): Pr
 
 export async function getCloudEncryptedItems(): Promise<EncryptedVaultItem[]> {
   const response = await fetch("/api/vault/items", { cache: "no-store" });
+  throwIfSessionExpired(response);
   if (!response.ok) {
     throw new Error("Could not load encrypted vault items.");
   }
@@ -48,6 +64,7 @@ export async function storeCloudEncryptedItem(item: EncryptedVaultItem): Promise
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(item),
   });
+  throwIfSessionExpired(response);
   if (!response.ok) {
     throw new Error("Could not sync the encrypted vault item.");
   }
@@ -57,6 +74,7 @@ export async function deleteCloudEncryptedItem(itemId: string): Promise<void> {
   const response = await fetch(`/api/vault/items/${encodeURIComponent(itemId)}`, {
     method: "DELETE",
   });
+  throwIfSessionExpired(response);
   if (!response.ok) {
     throw new Error("Could not delete the encrypted vault item.");
   }

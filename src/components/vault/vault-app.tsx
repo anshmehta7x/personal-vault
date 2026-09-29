@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
   Cloud,
   CloudOff,
@@ -32,7 +32,8 @@ interface VaultAppProps {
 
 export function VaultApp({ userId }: VaultAppProps) {
   const router = useRouter();
-  const vault = useVault(userId);
+  const redirectToSignIn = useCallback((): void => router.push("/auth"), [router]);
+  const vault = useVault(userId, redirectToSignIn);
   const [activeFilter, setActiveFilter] = useState<VaultFilter>("all");
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);

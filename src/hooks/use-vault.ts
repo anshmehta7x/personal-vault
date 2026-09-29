@@ -12,6 +12,7 @@ import {
   deleteCloudEncryptedItem,
   getCloudEncryptedItems,
   getCloudVaultKeyEnvelope,
+  SessionExpiredError,
   storeCloudEncryptedItem,
   storeCloudVaultKeyEnvelope,
   VaultAlreadyExistsError,
@@ -86,7 +87,7 @@ async function decryptReadableItems(
   ), { items: [], encryptedItems: [] });
 }
 
-export function useVault(userId: string) {
+export function useVault(userId: string, onSessionExpired: () => void) {
   const [status, setStatus] = useState<VaultStatus>("loading");
   const [data, setData] = useState<VaultData | null>(null);
   const [error, setError] = useState("");
@@ -115,7 +116,11 @@ export function useVault(userId: string) {
         envelopeRef.current = cloudEnvelope;
         setSyncStatus("synced");
         setStatus(cloudEnvelope ? "locked" : "new");
-      } catch {
+      } catch (hydrateError) {
+        if (hydrateError instanceof SessionExpiredError) {
+          onSessionExpired();
+          return;
+        }
         if (!isCancelled) {
           envelopeRef.current = localEnvelope;
           setSyncStatus("offline");
@@ -128,7 +133,7 @@ export function useVault(userId: string) {
     return () => {
       isCancelled = true;
     };
-  }, [hydrateAttempt, userId]);
+  }, [hydrateAttempt, onSessionExpired, userId]);
 
   const canRetry = hydrateAttempt < MAX_HYDRATE_RETRIES;
 
@@ -147,6 +152,16 @@ export function useVault(userId: string) {
     setError("");
     setStatus(envelopeRef.current ? "locked" : "new");
   }, []);
+
+  /** Locks and hands off to sign-in when the server rejects the session. */
+  function handleSessionExpired(caughtError: unknown): boolean {
+    if (!(caughtError instanceof SessionExpiredError)) {
+      return false;
+    }
+    lock();
+    onSessionExpired();
+    return true;
+  }
 
   useEffect(() => {
     if (status !== "unlocked") {
@@ -179,6 +194,9 @@ export function useVault(userId: string) {
       setSyncStatus("synced");
       return true;
     } catch (setupError) {
+      if (handleSessionExpired(setupError)) {
+        return false;
+      }
       if (setupError instanceof VaultAlreadyExistsError) {
         retry();
         setError("This account already has a vault. Unlock it with its passphrase.");
@@ -214,10 +232,16 @@ export function useVault(userId: string) {
       try {
         await Promise.all(reconciled.itemsToUpload.map(storeCloudEncryptedItem));
         setSyncStatus("synced");
-      } catch {
+      } catch (uploadError) {
+        if (handleSessionExpired(uploadError)) {
+          return false;
+        }
         setSyncStatus("offline");
       }
-    } catch {
+    } catch (loadError) {
+      if (handleSessionExpired(loadError)) {
+        return false;
+      }
       if (!hasLocalEncryptedItemCache(userId)) {
         setError("Could not load encrypted vault items. Check your connection and try again.");
         return false;
@@ -255,7 +279,10 @@ export function useVault(userId: string) {
           setData((current) => current ? {
             items: current.items.filter((item) => !expiredItems.includes(item)),
           } : null);
-        } catch {
+        } catch (cleanupError) {
+          if (handleSessionExpired(cleanupError)) {
+            return;
+          }
           setSyncStatus("offline");
         }
       })();
@@ -275,7 +302,11 @@ export function useVault(userId: string) {
     try {
       await storeCloudEncryptedItem(encryptedItem);
       setSyncStatus("synced");
-    } catch {
+    } catch (syncError) {
+      // The encrypted edit stays in this user's cache and syncs after signing back in.
+      if (handleSessionExpired(syncError)) {
+        return;
+      }
       setSyncStatus("offline");
     }
   }
@@ -335,7 +366,10 @@ export function useVault(userId: string) {
       deleteLocalEncryptedItem(userId, id);
       setData({ items: data.items.filter((candidate) => candidate.id !== id) });
       setSyncStatus("synced");
-    } catch {
+    } catch (deleteError) {
+      if (handleSessionExpired(deleteError)) {
+        return;
+      }
       setSyncStatus("offline");
       setError("Could not permanently delete this item. Try again while online.");
     }
@@ -350,7 +384,13 @@ export function useVault(userId: string) {
       throw new Error("Documents must be 25 MB or smaller.");
     }
     const id = crypto.randomUUID();
-    const encryptionIv = await storeEncryptedDocument(userId, id, file, key);
+    let encryptionIv: string;
+    try {
+      encryptionIv = await storeEncryptedDocument(userId, id, file, key);
+    } catch (uploadError) {
+      handleSessionExpired(uploadError);
+      throw uploadError;
+    }
     return {
       id,
       name: file.name,
@@ -366,7 +406,13 @@ export function useVault(userId: string) {
     if (!key) {
       throw new Error("Vault is locked.");
     }
-    const data = await getDecryptedDocument(userId, document, key);
+    let data: ArrayBuffer;
+    try {
+      data = await getDecryptedDocument(userId, document, key);
+    } catch (downloadError) {
+      handleSessionExpired(downloadError);
+      throw downloadError;
+    }
     const url = URL.createObjectURL(new Blob([data], { type: document.mimeType }));
     const link = window.document.createElement("a");
     link.href = url;

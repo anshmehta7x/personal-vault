@@ -4,6 +4,7 @@ import type {
   VaultKeyEnvelope,
 } from "@/types/vault";
 
+import { throwIfSessionExpired } from "./vault-api";
 import {
   base64ToBytes,
   bytesToBase64,
@@ -159,6 +160,7 @@ export async function storeEncryptedDocument(
 ): Promise<string> {
   const { encrypted, iv } = await encryptDocument(key, await file.arrayBuffer());
   const signingResponse = await fetch(`/api/documents/${id}`, { method: "POST" });
+  throwIfSessionExpired(signingResponse);
   if (!signingResponse.ok) {
     throw new Error("Could not prepare the private document upload.");
   }
@@ -205,6 +207,7 @@ export async function getDecryptedDocument(
     return decryptDocument(key, localDocument.encrypted, new Uint8Array(localDocument.iv));
   }
   const signingResponse = await fetch(`/api/documents/${document.id}`, { cache: "no-store" });
+  throwIfSessionExpired(signingResponse);
   if (!signingResponse.ok) {
     throw new Error("Could not prepare the private document download.");
   }
@@ -231,6 +234,7 @@ export async function deleteEncryptedDocument(userId: string, id: string): Promi
   });
   database.close();
   const response = await cloudDelete;
+  throwIfSessionExpired(response);
   if (!response.ok) {
     throw new Error("Could not delete the encrypted cloud document.");
   }
