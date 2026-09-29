@@ -47,10 +47,18 @@ async function derivePassphraseKey(passphrase: string, salt: Uint8Array): Promis
     hashLength: 32,
     outputType: "binary",
   });
-  return crypto.subtle.importKey("raw", Uint8Array.from(keyBytes), "AES-GCM", false, [
-    "encrypt",
-    "decrypt",
-  ]);
+  const rawKey = Uint8Array.from(keyBytes);
+  try {
+    return await crypto.subtle.importKey("raw", rawKey, "AES-GCM", false, ["encrypt", "decrypt"]);
+  } finally {
+    keyBytes.fill(0);
+    rawKey.fill(0);
+  }
+}
+
+/** Imports the vault key so page scripts can use it but never export its raw bytes. */
+function importVaultKey(rawKey: Uint8Array<ArrayBuffer>): Promise<CryptoKey> {
+  return crypto.subtle.importKey("raw", rawKey, "AES-GCM", false, ["encrypt", "decrypt"]);
 }
 
 async function encrypt(
@@ -90,24 +98,29 @@ export async function createVault(passphrase: string): Promise<{
 }> {
   const salt = randomBytes(16);
   const passphraseKey = await derivePassphraseKey(passphrase, salt);
-  const key = await crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, true, [
-    "encrypt",
-    "decrypt",
-  ]);
-  const rawKey = await crypto.subtle.exportKey("raw", key);
-  const wrapped = await encrypt(passphraseKey, rawKey, WRAP_CONTEXT);
-  const data: VaultData = { items: [] };
-
-  return {
-    data,
-    envelope: {
-      cryptoVersion: 1,
-      kdfSalt: bytesToBase64(salt),
-      wrapIv: wrapped.iv,
-      wrappedKey: wrapped.cipherText,
-    },
-    key,
-  };
+  // Extractable only long enough to wrap it; the returned key is a non-extractable copy.
+  const extractableKey = await crypto.subtle.generateKey(
+    { name: "AES-GCM", length: 256 },
+    true,
+    ["encrypt", "decrypt"],
+  );
+  const rawKey = new Uint8Array(await crypto.subtle.exportKey("raw", extractableKey));
+  try {
+    const wrapped = await encrypt(passphraseKey, rawKey, WRAP_CONTEXT);
+    const data: VaultData = { items: [] };
+    return {
+      data,
+      envelope: {
+        cryptoVersion: 1,
+        kdfSalt: bytesToBase64(salt),
+        wrapIv: wrapped.iv,
+        wrappedKey: wrapped.cipherText,
+      },
+      key: await importVaultKey(rawKey),
+    };
+  } finally {
+    rawKey.fill(0);
+  }
 }
 
 export async function unlockVaultKey(
@@ -115,16 +128,17 @@ export async function unlockVaultKey(
   passphrase: string,
 ): Promise<CryptoKey> {
   const passphraseKey = await derivePassphraseKey(passphrase, base64ToBytes(envelope.kdfSalt));
-  const rawKey = await decrypt(
+  const rawKey = new Uint8Array(await decrypt(
     passphraseKey,
     envelope.wrappedKey,
     envelope.wrapIv,
     WRAP_CONTEXT,
-  );
-  return crypto.subtle.importKey("raw", rawKey, "AES-GCM", true, [
-    "encrypt",
-    "decrypt",
-  ]);
+  ));
+  try {
+    return await importVaultKey(rawKey);
+  } finally {
+    rawKey.fill(0);
+  }
 }
 
 export async function encryptVaultItem(

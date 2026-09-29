@@ -173,6 +173,13 @@ export function VaultApp({ userId }: VaultAppProps) {
             <button onClick={() => registerPasskey("cross-platform")} type="button">
               <Usb size={16} /> Add security key
             </button>
+            {vault.unreadableItemCount ? (
+              <p className={styles.securityNotice}>
+                {vault.unreadableItemCount === 1
+                  ? "1 item could not be decrypted and is hidden."
+                  : `${vault.unreadableItemCount} items could not be decrypted and are hidden.`}
+              </p>
+            ) : null}
             {securityNotice ? <p className={styles.securityNotice}>{securityNotice}</p> : null}
             <button onClick={vault.lock} type="button"><LockKeyhole size={16} /> Lock vault</button>
             <button onClick={signOut} type="button"><LogOut size={16} /> Sign out</button>

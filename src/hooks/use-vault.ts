@@ -63,13 +63,27 @@ function reconcileEncryptedItems(
   return { items: [...itemsById.values()], itemsToUpload };
 }
 
-/** Keeps only cached rows that authenticate under this vault's key. */
-async function filterDecryptableItems(
+interface ReadableItems {
+  items: VaultItem[];
+  encryptedItems: EncryptedVaultItem[];
+}
+
+/** Decrypts each row independently so one unreadable row cannot block the rest. */
+async function decryptReadableItems(
   key: CryptoKey,
-  items: EncryptedVaultItem[],
-): Promise<EncryptedVaultItem[]> {
-  const results = await Promise.allSettled(items.map((item) => decryptVaultItem(key, item)));
-  return items.filter((_item, index) => results[index].status === "fulfilled");
+  encryptedItems: EncryptedVaultItem[],
+): Promise<ReadableItems> {
+  const results = await Promise.allSettled(
+    encryptedItems.map((item) => decryptVaultItem(key, item)),
+  );
+  return results.reduce<ReadableItems>((readable, result, index) => (
+    result.status === "fulfilled"
+      ? {
+        items: [...readable.items, result.value],
+        encryptedItems: [...readable.encryptedItems, encryptedItems[index]],
+      }
+      : readable
+  ), { items: [], encryptedItems: [] });
 }
 
 export function useVault(userId: string) {
@@ -78,6 +92,7 @@ export function useVault(userId: string) {
   const [error, setError] = useState("");
   const [syncStatus, setSyncStatus] = useState<SyncStatus>("syncing");
   const [hydrateAttempt, setHydrateAttempt] = useState(0);
+  const [unreadableItemCount, setUnreadableItemCount] = useState(0);
   const keyRef = useRef<CryptoKey | null>(null);
   const envelopeRef = useRef<VaultKeyEnvelope | null>(null);
 
@@ -128,6 +143,7 @@ export function useVault(userId: string) {
   const lock = useCallback((): void => {
     keyRef.current = null;
     setData(null);
+    setUnreadableItemCount(0);
     setError("");
     setStatus(envelopeRef.current ? "locked" : "new");
   }, []);
@@ -187,7 +203,9 @@ export function useVault(userId: string) {
       return false;
     }
     // Never sync or trust cached rows that this vault key cannot authenticate.
-    const localItems = await filterDecryptableItems(key, getLocalEncryptedItems(userId));
+    const localItems = (
+      await decryptReadableItems(key, getLocalEncryptedItems(userId))
+    ).encryptedItems;
     let encryptedItems: EncryptedVaultItem[];
     try {
       const cloudItems = await getCloudEncryptedItems();
@@ -207,18 +225,16 @@ export function useVault(userId: string) {
       encryptedItems = localItems;
       setSyncStatus("offline");
     }
-    let nextData: VaultData;
+    // Unreadable rows stay on the server untouched; they are only hidden and left uncached.
+    const readable = await decryptReadableItems(key, encryptedItems);
+    const nextData: VaultData = { items: readable.items };
     try {
-      nextData = {
-        items: await Promise.all(
-          encryptedItems.map((item) => decryptVaultItem(key, item)),
-        ),
-      };
-      storeLocalEncryptedItems(userId, encryptedItems);
-    } catch {
-      setError("Could not decrypt the stored vault items.");
-      return false;
+      storeLocalEncryptedItems(userId, readable.encryptedItems);
+    } catch (cacheError) {
+      // The offline cache is optional; the vault still opens from the server copy.
+      console.warn("Could not cache encrypted vault items on this device.", cacheError);
     }
+    setUnreadableItemCount(encryptedItems.length - readable.encryptedItems.length);
     keyRef.current = key;
     setData(nextData);
     setStatus("unlocked");
@@ -381,5 +397,6 @@ export function useVault(userId: string) {
     status,
     syncStatus,
     unlock,
+    unreadableItemCount,
   };
 }
