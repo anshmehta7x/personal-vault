@@ -68,11 +68,15 @@ limited offline access.
 
 ## Screenshots
 
-> **Placeholder:** Censored desktop vault overview
+**Login:**
+<img width="3191" height="1546" alt="Screenshot From 2026-09-29 13-55-28" src="https://github.com/user-attachments/assets/3277a8ff-e297-43e3-93d1-068bdac4f5e6" />
 
-> **Placeholder:** Censored item details and custom fields
 
-> **Placeholder:** Censored mobile layout
+**Desktop vault overview:**
+<img width="2000" height="968" alt="Screenshot From 2026-09-29 13-49-47" src="https://github.com/user-attachments/assets/66272148-6ddb-446d-aff4-7351ae57c7f9" />
+
+**Item Creation:** 
+<img width="2000" height="968" alt="Screenshot From 2026-09-29 13-54-00" src="https://github.com/user-attachments/assets/d68f7d67-b780-4991-a220-bba38771b7b6" />
 
 ## Hosted-site onboarding
 
