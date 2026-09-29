@@ -101,7 +101,16 @@ export function getLocalEncryptedItems(): EncryptedVaultItem[] {
 }
 
 export function hasLocalEncryptedItemCache(): boolean {
-  return localStorage.getItem(VAULT_ITEMS_KEY) !== null;
+  const value = localStorage.getItem(VAULT_ITEMS_KEY);
+  if (!value) {
+    return false;
+  }
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return Array.isArray(parsed) && parsed.every(isEncryptedVaultItem);
+  } catch {
+    return false;
+  }
 }
 
 export function storeLocalEncryptedItems(items: EncryptedVaultItem[]): void {
