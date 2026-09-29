@@ -202,7 +202,6 @@ export function useVault() {
         const cloudItems = await getCloudEncryptedItems();
         const reconciled = reconcileEncryptedItems(localItems, cloudItems);
         encryptedItems = reconciled.items;
-        storeLocalEncryptedItems(encryptedItems);
         try {
           await Promise.all(reconciled.itemsToUpload.map(storeCloudEncryptedItem));
           setSyncStatus("synced");
@@ -223,6 +222,7 @@ export function useVault() {
             encryptedItems.map((item) => decryptVaultItem(key, item)),
           ),
         };
+        storeLocalEncryptedItems(encryptedItems);
       } catch {
         setError("Could not decrypt the stored vault items.");
         return false;
