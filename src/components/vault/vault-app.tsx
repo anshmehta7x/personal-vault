@@ -25,9 +25,13 @@ import { UnlockScreen } from "./unlock-screen";
 import { VaultFilter, VaultSidebar } from "./vault-sidebar";
 import styles from "./vault.module.css";
 
-export function VaultApp() {
+interface VaultAppProps {
+  userId: string;
+}
+
+export function VaultApp({ userId }: VaultAppProps) {
   const router = useRouter();
-  const vault = useVault();
+  const vault = useVault(userId);
   const [activeFilter, setActiveFilter] = useState<VaultFilter>("all");
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -93,7 +97,13 @@ export function VaultApp() {
   }
 
   async function signOut(): Promise<void> {
-    vault.lock();
+    if (
+      vault.syncStatus !== "synced"
+      && !window.confirm("Some changes have not synced yet and will be lost. Sign out anyway?")
+    ) {
+      return;
+    }
+    await vault.clearLocalData();
     await authClient.signOut();
     router.push("/auth");
   }

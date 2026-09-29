@@ -15,7 +15,9 @@ import {
   storeCloudEncryptedItem,
   storeCloudVaultKeyEnvelope,
 } from "@/lib/vault-api";
+import { purgeLegacyCache } from "@/lib/vault-legacy-cache";
 import {
+  clearLocalVault,
   deleteEncryptedDocument,
   deleteLocalEncryptedItem,
   getDecryptedDocument,
@@ -59,7 +61,16 @@ function reconcileEncryptedItems(
   return { items: [...itemsById.values()], itemsToUpload };
 }
 
-export function useVault() {
+/** Keeps only cached rows that authenticate under this vault's key. */
+async function filterDecryptableItems(
+  key: CryptoKey,
+  items: EncryptedVaultItem[],
+): Promise<EncryptedVaultItem[]> {
+  const results = await Promise.allSettled(items.map((item) => decryptVaultItem(key, item)));
+  return items.filter((_item, index) => results[index].status === "fulfilled");
+}
+
+export function useVault(userId: string) {
   const [status, setStatus] = useState<VaultStatus>("loading");
   const [data, setData] = useState<VaultData | null>(null);
   const [error, setError] = useState("");
@@ -70,22 +81,22 @@ export function useVault() {
   useEffect(() => {
     let isCancelled = false;
     async function hydrate(): Promise<void> {
-      const localEnvelope = getLocalVaultKeyEnvelope();
+      const localEnvelope = getLocalVaultKeyEnvelope(userId);
       try {
         const cloudEnvelope = await getCloudVaultKeyEnvelope();
         if (isCancelled) {
           return;
         }
-        const envelope = cloudEnvelope ?? localEnvelope;
-        if (!cloudEnvelope && localEnvelope) {
-          await storeCloudVaultKeyEnvelope(localEnvelope);
+        await purgeLegacyCache();
+        // The server is the source of truth for the envelope; a local copy is only an offline cache.
+        if (cloudEnvelope) {
+          storeLocalVaultKeyEnvelope(userId, cloudEnvelope);
+        } else {
+          await clearLocalVault(userId);
         }
-        if (envelope) {
-          storeLocalVaultKeyEnvelope(envelope);
-        }
-        envelopeRef.current = envelope;
+        envelopeRef.current = cloudEnvelope;
         setSyncStatus("synced");
-        setStatus(envelope ? "locked" : "new");
+        setStatus(cloudEnvelope ? "locked" : "new");
       } catch {
         if (!isCancelled) {
           envelopeRef.current = localEnvelope;
@@ -98,7 +109,7 @@ export function useVault() {
     return () => {
       isCancelled = true;
     };
-  }, []);
+  }, [userId]);
 
   const lock = useCallback((): void => {
     keyRef.current = null;
@@ -129,8 +140,8 @@ export function useVault() {
     try {
       const created = await createVault(passphrase);
       await storeCloudVaultKeyEnvelope(created.envelope);
-      storeLocalVaultKeyEnvelope(created.envelope);
-      storeLocalEncryptedItems([]);
+      storeLocalVaultKeyEnvelope(userId, created.envelope);
+      storeLocalEncryptedItems(userId, []);
       envelopeRef.current = created.envelope;
       keyRef.current = created.key;
       setData(created.data);
@@ -156,7 +167,8 @@ export function useVault() {
       setError("That vault passphrase did not work.");
       return false;
     }
-    const localItems = getLocalEncryptedItems();
+    // Never sync or trust cached rows that this vault key cannot authenticate.
+    const localItems = await filterDecryptableItems(key, getLocalEncryptedItems(userId));
     let encryptedItems: EncryptedVaultItem[];
     try {
       const cloudItems = await getCloudEncryptedItems();
@@ -169,7 +181,7 @@ export function useVault() {
         setSyncStatus("offline");
       }
     } catch {
-      if (!hasLocalEncryptedItemCache()) {
+      if (!hasLocalEncryptedItemCache(userId)) {
         setError("Could not load encrypted vault items. Check your connection and try again.");
         return false;
       }
@@ -183,7 +195,7 @@ export function useVault() {
           encryptedItems.map((item) => decryptVaultItem(key, item)),
         ),
       };
-      storeLocalEncryptedItems(encryptedItems);
+      storeLocalEncryptedItems(userId, encryptedItems);
     } catch {
       setError("Could not decrypt the stored vault items.");
       return false;
@@ -200,10 +212,10 @@ export function useVault() {
         try {
           await Promise.all(expiredItems.map(async (item) => {
             await Promise.all(
-              item.documents.map((document) => deleteEncryptedDocument(document.id)),
+              item.documents.map((document) => deleteEncryptedDocument(userId, document.id)),
             );
             await deleteCloudEncryptedItem(item.id);
-            deleteLocalEncryptedItem(item.id);
+            deleteLocalEncryptedItem(userId, item.id);
           }));
           setData((current) => current ? {
             items: current.items.filter((item) => !expiredItems.includes(item)),
@@ -223,7 +235,7 @@ export function useVault() {
     }
     const encryptedItem = await encryptVaultItem(key, item);
     setData({ items: nextItems });
-    upsertLocalEncryptedItem(encryptedItem);
+    upsertLocalEncryptedItem(userId, encryptedItem);
     setSyncStatus("syncing");
     try {
       await storeCloudEncryptedItem(encryptedItem);
@@ -282,10 +294,10 @@ export function useVault() {
     const item = data.items.find((candidate) => candidate.id === id);
     try {
       await Promise.all(
-        item?.documents.map((document) => deleteEncryptedDocument(document.id)) ?? [],
+        item?.documents.map((document) => deleteEncryptedDocument(userId, document.id)) ?? [],
       );
       await deleteCloudEncryptedItem(id);
-      deleteLocalEncryptedItem(id);
+      deleteLocalEncryptedItem(userId, id);
       setData({ items: data.items.filter((candidate) => candidate.id !== id) });
       setSyncStatus("synced");
     } catch {
@@ -303,7 +315,7 @@ export function useVault() {
       throw new Error("Documents must be 25 MB or smaller.");
     }
     const id = crypto.randomUUID();
-    const encryptionIv = await storeEncryptedDocument(id, file, key);
+    const encryptionIv = await storeEncryptedDocument(userId, id, file, key);
     return {
       id,
       name: file.name,
@@ -319,7 +331,7 @@ export function useVault() {
     if (!key) {
       throw new Error("Vault is locked.");
     }
-    const data = await getDecryptedDocument(document, key);
+    const data = await getDecryptedDocument(userId, document, key);
     const url = URL.createObjectURL(new Blob([data], { type: document.mimeType }));
     const link = window.document.createElement("a");
     link.href = url;
@@ -328,8 +340,14 @@ export function useVault() {
     URL.revokeObjectURL(url);
   }
 
+  async function clearLocalData(): Promise<void> {
+    lock();
+    await clearLocalVault(userId);
+  }
+
   return {
     addDocument,
+    clearLocalData,
     data,
     downloadDocument,
     error,

@@ -11,5 +11,5 @@ export default async function VaultPage() {
   if (!session?.user) {
     redirect("/auth");
   }
-  return <VaultApp />;
+  return <VaultApp userId={session.user.id} />;
 }

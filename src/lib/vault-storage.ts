@@ -11,10 +11,19 @@ import {
   encryptDocument,
 } from "./vault-crypto";
 
-const VAULT_KEY = "locker:vault-key:v1";
-const VAULT_ITEMS_KEY = "locker:vault-items:v2";
-const DATABASE_NAME = "locker-documents";
 const STORE_NAME = "documents";
+
+function getVaultKeyStorageKey(userId: string): string {
+  return `locker:${userId}:vault-key:v1`;
+}
+
+function getVaultItemsStorageKey(userId: string): string {
+  return `locker:${userId}:vault-items:v2`;
+}
+
+function getDatabaseName(userId: string): string {
+  return `locker-documents:${userId}`;
+}
 
 interface StoredDocument {
   id: string;
@@ -33,8 +42,7 @@ function isVaultKeyEnvelope(value: unknown): value is VaultKeyEnvelope {
     && typeof envelope.wrappedKey === "string";
 }
 
-export function getLocalVaultKeyEnvelope(): VaultKeyEnvelope | null {
-  const value = localStorage.getItem(VAULT_KEY);
+function parseVaultKeyEnvelope(value: string | null): VaultKeyEnvelope | null {
   if (!value) {
     return null;
   }
@@ -46,8 +54,12 @@ export function getLocalVaultKeyEnvelope(): VaultKeyEnvelope | null {
   }
 }
 
-export function storeLocalVaultKeyEnvelope(envelope: VaultKeyEnvelope): void {
-  localStorage.setItem(VAULT_KEY, JSON.stringify(envelope));
+export function getLocalVaultKeyEnvelope(userId: string): VaultKeyEnvelope | null {
+  return parseVaultKeyEnvelope(localStorage.getItem(getVaultKeyStorageKey(userId)));
+}
+
+export function storeLocalVaultKeyEnvelope(userId: string, envelope: VaultKeyEnvelope): void {
+  localStorage.setItem(getVaultKeyStorageKey(userId), JSON.stringify(envelope));
 }
 
 function isEncryptedVaultItem(value: unknown): value is EncryptedVaultItem {
@@ -64,8 +76,7 @@ function isEncryptedVaultItem(value: unknown): value is EncryptedVaultItem {
     && (typeof item.deletedAt === "string" || item.deletedAt === null);
 }
 
-export function getLocalEncryptedItems(): EncryptedVaultItem[] {
-  const value = localStorage.getItem(VAULT_ITEMS_KEY);
+function parseEncryptedItems(value: string | null): EncryptedVaultItem[] {
   if (!value) {
     return [];
   }
@@ -77,8 +88,12 @@ export function getLocalEncryptedItems(): EncryptedVaultItem[] {
   }
 }
 
-export function hasLocalEncryptedItemCache(): boolean {
-  const value = localStorage.getItem(VAULT_ITEMS_KEY);
+export function getLocalEncryptedItems(userId: string): EncryptedVaultItem[] {
+  return parseEncryptedItems(localStorage.getItem(getVaultItemsStorageKey(userId)));
+}
+
+export function hasLocalEncryptedItemCache(userId: string): boolean {
+  const value = localStorage.getItem(getVaultItemsStorageKey(userId));
   if (!value) {
     return false;
   }
@@ -90,27 +105,44 @@ export function hasLocalEncryptedItemCache(): boolean {
   }
 }
 
-export function storeLocalEncryptedItems(items: EncryptedVaultItem[]): void {
-  localStorage.setItem(VAULT_ITEMS_KEY, JSON.stringify(items));
+export function storeLocalEncryptedItems(userId: string, items: EncryptedVaultItem[]): void {
+  localStorage.setItem(getVaultItemsStorageKey(userId), JSON.stringify(items));
 }
 
-export function upsertLocalEncryptedItem(item: EncryptedVaultItem): void {
-  const current = getLocalEncryptedItems();
+export function upsertLocalEncryptedItem(userId: string, item: EncryptedVaultItem): void {
+  const current = getLocalEncryptedItems(userId);
   const exists = current.some((candidate) => candidate.itemId === item.itemId);
-  storeLocalEncryptedItems(exists
+  storeLocalEncryptedItems(userId, exists
     ? current.map((candidate) => candidate.itemId === item.itemId ? item : candidate)
     : [item, ...current]);
 }
 
-export function deleteLocalEncryptedItem(itemId: string): void {
+export function deleteLocalEncryptedItem(userId: string, itemId: string): void {
   storeLocalEncryptedItems(
-    getLocalEncryptedItems().filter((item) => item.itemId !== itemId),
+    userId,
+    getLocalEncryptedItems(userId).filter((item) => item.itemId !== itemId),
   );
 }
 
-function openDocumentDatabase(): Promise<IDBDatabase> {
+export function deleteDatabase(name: string): Promise<void> {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DATABASE_NAME, 1);
+    const request = indexedDB.deleteDatabase(name);
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
+    // Deletion completes once other tabs close their connections; don't block sign-out on it.
+    request.onblocked = () => resolve();
+  });
+}
+
+export async function clearLocalVault(userId: string): Promise<void> {
+  localStorage.removeItem(getVaultKeyStorageKey(userId));
+  localStorage.removeItem(getVaultItemsStorageKey(userId));
+  await deleteDatabase(getDatabaseName(userId));
+}
+
+function openDocumentDatabase(userId: string): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(getDatabaseName(userId), 1);
     request.onupgradeneeded = () => {
       request.result.createObjectStore(STORE_NAME, { keyPath: "id" });
     };
@@ -120,6 +152,7 @@ function openDocumentDatabase(): Promise<IDBDatabase> {
 }
 
 export async function storeEncryptedDocument(
+  userId: string,
   id: string,
   file: File,
   key: CryptoKey,
@@ -138,7 +171,7 @@ export async function storeEncryptedDocument(
   if (!uploadResponse.ok) {
     throw new Error("The encrypted document upload failed.");
   }
-  const database = await openDocumentDatabase();
+  const database = await openDocumentDatabase(userId);
   await new Promise<void>((resolve, reject) => {
     const transaction = database.transaction(STORE_NAME, "readwrite");
     transaction.objectStore(STORE_NAME).put({ id, encrypted, iv } satisfies StoredDocument);
@@ -149,8 +182,8 @@ export async function storeEncryptedDocument(
   return bytesToBase64(iv);
 }
 
-async function getLocalDocument(id: string): Promise<StoredDocument | null> {
-  const database = await openDocumentDatabase();
+async function getLocalDocument(userId: string, id: string): Promise<StoredDocument | null> {
+  const database = await openDocumentDatabase(userId);
   const document = await new Promise<StoredDocument | null>((resolve, reject) => {
     const request = database.transaction(STORE_NAME).objectStore(STORE_NAME).get(id);
     request.onsuccess = () => {
@@ -163,10 +196,11 @@ async function getLocalDocument(id: string): Promise<StoredDocument | null> {
 }
 
 export async function getDecryptedDocument(
+  userId: string,
   document: VaultDocument,
   key: CryptoKey,
 ): Promise<ArrayBuffer> {
-  const localDocument = await getLocalDocument(document.id);
+  const localDocument = await getLocalDocument(userId, document.id);
   if (localDocument) {
     return decryptDocument(key, localDocument.encrypted, new Uint8Array(localDocument.iv));
   }
@@ -186,9 +220,9 @@ export async function getDecryptedDocument(
   );
 }
 
-export async function deleteEncryptedDocument(id: string): Promise<void> {
+export async function deleteEncryptedDocument(userId: string, id: string): Promise<void> {
   const cloudDelete = fetch(`/api/documents/${id}`, { method: "DELETE" });
-  const database = await openDocumentDatabase();
+  const database = await openDocumentDatabase(userId);
   await new Promise<void>((resolve, reject) => {
     const transaction = database.transaction(STORE_NAME, "readwrite");
     transaction.objectStore(STORE_NAME).delete(id);
