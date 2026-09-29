@@ -6,11 +6,6 @@ import type {
 } from "@/types/vault";
 
 import {
-  getCloudVaultMetadata,
-  storeCloudVaultRecord as storeCloudVaultEnvelope,
-} from "./vault-api";
-
-import {
   base64ToBytes,
   bytesToBase64,
   decryptDocument,
@@ -78,22 +73,6 @@ export function storeLocalVaultMetadata(metadata: VaultMetadata): void {
   localStorage.setItem(VAULT_KEY, JSON.stringify(metadata));
 }
 
-export function getVaultRecord(): VaultRecord | null {
-  return getLocalVaultMetadata()?.record ?? null;
-}
-
-export function storeVaultRecord(record: VaultRecord): void {
-  localStorage.setItem(VAULT_KEY, JSON.stringify(record));
-}
-
-export async function getCloudVaultRecord(): Promise<VaultRecord | null> {
-  return (await getCloudVaultMetadata())?.record ?? null;
-}
-
-export async function storeCloudVaultRecord(record: VaultRecord): Promise<void> {
-  await storeCloudVaultEnvelope(record, 1);
-}
-
 function isEncryptedVaultItem(value: unknown): value is EncryptedVaultItem {
   if (!value || typeof value !== "object") {
     return false;
@@ -119,6 +98,10 @@ export function getLocalEncryptedItems(): EncryptedVaultItem[] {
   } catch {
     return [];
   }
+}
+
+export function hasLocalEncryptedItemCache(): boolean {
+  return localStorage.getItem(VAULT_ITEMS_KEY) !== null;
 }
 
 export function storeLocalEncryptedItems(items: EncryptedVaultItem[]): void {

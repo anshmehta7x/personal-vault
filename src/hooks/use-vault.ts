@@ -2,17 +2,40 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { createVault, sealVault, unlockVault } from "@/lib/vault-crypto";
+import {
+  createVault,
+  decryptVaultItem,
+  encryptVaultItem,
+  unlockVault,
+  unlockVaultKey,
+} from "@/lib/vault-crypto";
+import {
+  deleteCloudEncryptedItem,
+  getCloudEncryptedItems,
+  getCloudVaultMetadata,
+  storeCloudEncryptedItem,
+  storeCloudVaultRecord,
+} from "@/lib/vault-api";
+import { migrateLegacyVault } from "@/lib/vault-migration";
 import {
   deleteEncryptedDocument,
-  getCloudVaultRecord,
+  deleteLocalEncryptedItem,
   getDecryptedDocument,
-  getVaultRecord,
-  storeCloudVaultRecord,
+  getLocalEncryptedItems,
+  getLocalVaultMetadata,
+  hasLocalEncryptedItemCache,
+  storeLocalEncryptedItems,
+  storeLocalVaultMetadata,
   storeEncryptedDocument,
-  storeVaultRecord,
+  upsertLocalEncryptedItem,
 } from "@/lib/vault-storage";
-import type { VaultData, VaultDocument, VaultItem, VaultRecord } from "@/types/vault";
+import type {
+  EncryptedVaultItem,
+  VaultData,
+  VaultDocument,
+  VaultItem,
+  VaultMetadata,
+} from "@/types/vault";
 
 type VaultStatus = "loading" | "new" | "locked" | "unlocked";
 type SyncStatus = "syncing" | "synced" | "offline";
@@ -21,40 +44,61 @@ const MAX_FILE_SIZE = 25 * 1024 * 1024;
 const AUTO_LOCK_MS = 10 * 60 * 1000;
 const TRASH_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
+function reconcileEncryptedItems(
+  localItems: EncryptedVaultItem[],
+  cloudItems: EncryptedVaultItem[],
+): { items: EncryptedVaultItem[]; itemsToUpload: EncryptedVaultItem[] } {
+  const itemsById = new Map(cloudItems.map((item) => [item.itemId, item]));
+  const itemsToUpload = localItems.filter((localItem) => {
+    const cloudItem = itemsById.get(localItem.itemId);
+    const isLocalNewer = !cloudItem
+      || new Date(localItem.updatedAt).getTime() > new Date(cloudItem.updatedAt).getTime();
+    if (isLocalNewer) {
+      itemsById.set(localItem.itemId, localItem);
+    }
+    return isLocalNewer;
+  });
+  return { items: [...itemsById.values()], itemsToUpload };
+}
+
 export function useVault() {
   const [status, setStatus] = useState<VaultStatus>("loading");
   const [data, setData] = useState<VaultData | null>(null);
   const [error, setError] = useState("");
   const [syncStatus, setSyncStatus] = useState<SyncStatus>("syncing");
   const keyRef = useRef<CryptoKey | null>(null);
-  const recordRef = useRef<VaultRecord | null>(null);
+  const metadataRef = useRef<VaultMetadata | null>(null);
 
   useEffect(() => {
     let isCancelled = false;
     async function hydrate(): Promise<void> {
-      const localRecord = getVaultRecord();
+      const localMetadata = getLocalVaultMetadata();
       try {
-        const cloudRecord = await getCloudVaultRecord();
+        const cloudMetadata = await getCloudVaultMetadata();
         if (isCancelled) {
           return;
         }
-        const record = !cloudRecord || (localRecord?.updatedAt ?? "") > cloudRecord.updatedAt
-          ? localRecord
-          : cloudRecord;
-        if (record) {
-          storeVaultRecord(record);
+        let metadata = cloudMetadata;
+        if (!cloudMetadata && localMetadata) {
+          await storeCloudVaultRecord(localMetadata.record, localMetadata.storageVersion);
+          metadata = localMetadata;
+        } else if (cloudMetadata?.storageVersion === 1
+          && localMetadata?.storageVersion === 1
+          && localMetadata.record.updatedAt > cloudMetadata.record.updatedAt) {
+          await storeCloudVaultRecord(localMetadata.record, 1);
+          metadata = localMetadata;
         }
-        if (localRecord && record === localRecord && localRecord !== cloudRecord) {
-          await storeCloudVaultRecord(localRecord);
+        if (metadata) {
+          storeLocalVaultMetadata(metadata);
         }
-        recordRef.current = record;
+        metadataRef.current = metadata;
         setSyncStatus("synced");
-        setStatus(record ? "locked" : "new");
+        setStatus(metadata ? "locked" : "new");
       } catch {
         if (!isCancelled) {
-          recordRef.current = localRecord;
+          metadataRef.current = localMetadata;
           setSyncStatus("offline");
-          setStatus(localRecord ? "locked" : "new");
+          setStatus(localMetadata ? "locked" : "new");
         }
       }
     }
@@ -68,7 +112,7 @@ export function useVault() {
     keyRef.current = null;
     setData(null);
     setError("");
-    setStatus(recordRef.current ? "locked" : "new");
+    setStatus(metadataRef.current ? "locked" : "new");
   }, []);
 
   useEffect(() => {
@@ -92,74 +136,137 @@ export function useVault() {
     setError("");
     try {
       const created = await createVault(passphrase);
-      storeVaultRecord(created.record);
-      recordRef.current = created.record;
+      const migratedAt = new Date().toISOString();
+      const metadata: VaultMetadata = {
+        record: created.record,
+        storageVersion: 2,
+        migratedAt,
+      };
+      await storeCloudVaultRecord(created.record, 2);
+      storeLocalVaultMetadata(metadata);
+      storeLocalEncryptedItems([]);
+      metadataRef.current = metadata;
       keyRef.current = created.key;
       setData(created.data);
       setStatus("unlocked");
-      setSyncStatus("syncing");
-      try {
-        await storeCloudVaultRecord(created.record);
-        setSyncStatus("synced");
-      } catch {
-        setSyncStatus("offline");
-      }
+      setSyncStatus("synced");
       return true;
     } catch {
-      setError("Could not create the vault on this device.");
+      setError("An internet connection is required to create the vault.");
       return false;
     }
   }
 
   async function unlock(passphrase: string): Promise<boolean> {
-    const record = recordRef.current;
-    if (!record) {
+    const metadata = metadataRef.current;
+    if (!metadata) {
       return false;
     }
     setError("");
-    try {
-      const unlocked = await unlockVault(record, passphrase);
-      keyRef.current = unlocked.key;
-      setData(unlocked.data);
-      setStatus("unlocked");
-      const expiredItems = unlocked.data.items.filter((item) => (
-        item.deletedAt
-        && Date.now() - new Date(item.deletedAt).getTime() >= TRASH_RETENTION_MS
-      ));
-      if (expiredItems.length) {
-        void (async () => {
-          try {
-            await Promise.all(expiredItems.flatMap((item) => (
-              item.documents.map((document) => deleteEncryptedDocument(document.id))
-            )));
-            await persist({
-              items: unlocked.data.items.filter((item) => !expiredItems.includes(item)),
-            });
-          } catch {
-            setSyncStatus("offline");
-          }
-        })();
+    let key: CryptoKey;
+    let nextData: VaultData;
+    if (metadata.storageVersion === 1) {
+      let unlocked: Awaited<ReturnType<typeof unlockVault>>;
+      try {
+        unlocked = await unlockVault(metadata.record, passphrase);
+      } catch {
+        setError("That vault passphrase did not work.");
+        return false;
       }
-      return true;
-    } catch {
-      setError("That vault passphrase did not work.");
-      return false;
+      try {
+        const migrated = await migrateLegacyVault(unlocked.data, unlocked.key);
+        const nextMetadata: VaultMetadata = {
+          ...metadata,
+          storageVersion: 2,
+          migratedAt: migrated.migratedAt,
+        };
+        storeLocalVaultMetadata(nextMetadata);
+        metadataRef.current = nextMetadata;
+        key = unlocked.key;
+        nextData = unlocked.data;
+        setSyncStatus("synced");
+      } catch {
+        setError("Could not migrate the encrypted vault. Check your connection and try again.");
+        return false;
+      }
+    } else {
+      try {
+        key = await unlockVaultKey(metadata.record, passphrase);
+      } catch {
+        setError("That vault passphrase did not work.");
+        return false;
+      }
+      const localItems = getLocalEncryptedItems();
+      let encryptedItems: EncryptedVaultItem[];
+      try {
+        const cloudItems = await getCloudEncryptedItems();
+        const reconciled = reconcileEncryptedItems(localItems, cloudItems);
+        encryptedItems = reconciled.items;
+        storeLocalEncryptedItems(encryptedItems);
+        try {
+          await Promise.all(reconciled.itemsToUpload.map(storeCloudEncryptedItem));
+          setSyncStatus("synced");
+        } catch {
+          setSyncStatus("offline");
+        }
+      } catch {
+        if (!hasLocalEncryptedItemCache()) {
+          setError("Could not load encrypted vault items. Check your connection and try again.");
+          return false;
+        }
+        encryptedItems = localItems;
+        setSyncStatus("offline");
+      }
+      try {
+        nextData = {
+          items: await Promise.all(
+            encryptedItems.map((item) => decryptVaultItem(key, item)),
+          ),
+        };
+      } catch {
+        setError("Could not decrypt the stored vault items.");
+        return false;
+      }
     }
+    keyRef.current = key;
+    setData(nextData);
+    setStatus("unlocked");
+    const expiredItems = nextData.items.filter((item) => (
+      item.deletedAt
+      && Date.now() - new Date(item.deletedAt).getTime() >= TRASH_RETENTION_MS
+    ));
+    if (expiredItems.length) {
+      void (async () => {
+        try {
+          await Promise.all(expiredItems.map(async (item) => {
+            await Promise.all(
+              item.documents.map((document) => deleteEncryptedDocument(document.id)),
+            );
+            await deleteCloudEncryptedItem(item.id);
+            deleteLocalEncryptedItem(item.id);
+          }));
+          setData((current) => current ? {
+            items: current.items.filter((item) => !expiredItems.includes(item)),
+          } : null);
+        } catch {
+          setSyncStatus("offline");
+        }
+      })();
+    }
+    return true;
   }
 
-  async function persist(nextData: VaultData): Promise<void> {
+  async function persistItem(item: VaultItem, nextItems: VaultItem[]): Promise<void> {
     const key = keyRef.current;
-    const record = recordRef.current;
-    if (!key || !record) {
+    if (!key) {
       throw new Error("Vault is locked.");
     }
-    setData(nextData);
-    const nextRecord = await sealVault(record, key, nextData);
-    storeVaultRecord(nextRecord);
-    recordRef.current = nextRecord;
+    const encryptedItem = await encryptVaultItem(key, item);
+    setData({ items: nextItems });
+    upsertLocalEncryptedItem(encryptedItem);
     setSyncStatus("syncing");
     try {
-      await storeCloudVaultRecord(nextRecord);
+      await storeCloudEncryptedItem(encryptedItem);
       setSyncStatus("synced");
     } catch {
       setSyncStatus("offline");
@@ -174,27 +281,38 @@ export function useVault() {
     const items = exists
       ? data.items.map((candidate) => (candidate.id === item.id ? item : candidate))
       : [item, ...data.items];
-    await persist({ items });
+    await persistItem(item, items);
   }
 
   async function moveToTrash(id: string): Promise<void> {
     if (!data) {
       return;
     }
-    await persist({
-      items: data.items.map((item) =>
-        item.id === id ? { ...item, deletedAt: new Date().toISOString() } : item,
-      ),
-    });
+    const now = new Date().toISOString();
+    const item = data.items.find((candidate) => candidate.id === id);
+    if (!item) {
+      return;
+    }
+    const nextItem = { ...item, deletedAt: now, updatedAt: now };
+    await persistItem(
+      nextItem,
+      data.items.map((candidate) => candidate.id === id ? nextItem : candidate),
+    );
   }
 
   async function restoreItem(id: string): Promise<void> {
     if (!data) {
       return;
     }
-    await persist({
-      items: data.items.map((item) => (item.id === id ? { ...item, deletedAt: null } : item)),
-    });
+    const item = data.items.find((candidate) => candidate.id === id);
+    if (!item) {
+      return;
+    }
+    const nextItem = { ...item, deletedAt: null, updatedAt: new Date().toISOString() };
+    await persistItem(
+      nextItem,
+      data.items.map((candidate) => candidate.id === id ? nextItem : candidate),
+    );
   }
 
   async function permanentlyDelete(id: string): Promise<void> {
@@ -202,8 +320,18 @@ export function useVault() {
       return;
     }
     const item = data.items.find((candidate) => candidate.id === id);
-    await Promise.all(item?.documents.map((document) => deleteEncryptedDocument(document.id)) ?? []);
-    await persist({ items: data.items.filter((candidate) => candidate.id !== id) });
+    try {
+      await Promise.all(
+        item?.documents.map((document) => deleteEncryptedDocument(document.id)) ?? [],
+      );
+      await deleteCloudEncryptedItem(id);
+      deleteLocalEncryptedItem(id);
+      setData({ items: data.items.filter((candidate) => candidate.id !== id) });
+      setSyncStatus("synced");
+    } catch {
+      setSyncStatus("offline");
+      setError("Could not permanently delete this item. Try again while online.");
+    }
   }
 
   async function addDocument(file: File): Promise<VaultDocument> {
