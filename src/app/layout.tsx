@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from "next";
+import { connection } from "next/server";
 import type { ReactNode } from "react";
 import { Analytics } from "@vercel/analytics/next";
 
@@ -19,7 +20,9 @@ interface RootLayoutProps {
   children: ReactNode;
 }
 
-export default function RootLayout({ children }: RootLayoutProps) {
+export default async function RootLayout({ children }: RootLayoutProps) {
+  // Nonce-based CSP needs every page rendered per request, so none can be prerendered.
+  await connection();
   return (
     <html lang="en">
       <body>
