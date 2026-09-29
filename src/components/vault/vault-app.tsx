@@ -22,6 +22,7 @@ import { ItemDetail } from "./item-detail";
 import { ItemEditor } from "./item-editor";
 import { ItemList } from "./item-list";
 import { UnlockScreen } from "./unlock-screen";
+import { VaultUnavailable } from "./vault-unavailable";
 import { VaultFilter, VaultSidebar } from "./vault-sidebar";
 import styles from "./vault.module.css";
 
@@ -69,6 +70,10 @@ export function VaultApp({ userId }: VaultAppProps) {
 
   if (vault.status === "loading") {
     return <main className={styles.loadingPage}><ShieldCheck size={30} /><span>Opening Locker…</span></main>;
+  }
+
+  if (vault.status === "unavailable") {
+    return <VaultUnavailable canRetry={vault.canRetry} onRetry={vault.retry} />;
   }
 
   if (vault.status === "new" || vault.status === "locked") {

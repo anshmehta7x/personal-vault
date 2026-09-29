@@ -3,6 +3,13 @@ import type {
   VaultKeyEnvelope,
 } from "@/types/vault";
 
+export class VaultAlreadyExistsError extends Error {
+  constructor() {
+    super("This account already has a vault.");
+    this.name = "VaultAlreadyExistsError";
+  }
+}
+
 export async function getCloudVaultKeyEnvelope(): Promise<VaultKeyEnvelope | null> {
   const response = await fetch("/api/vault", { cache: "no-store" });
   if (!response.ok) {
@@ -18,6 +25,9 @@ export async function storeCloudVaultKeyEnvelope(envelope: VaultKeyEnvelope): Pr
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(envelope),
   });
+  if (response.status === 409) {
+    throw new VaultAlreadyExistsError();
+  }
   if (!response.ok) {
     throw new Error("Could not sync the vault key envelope.");
   }

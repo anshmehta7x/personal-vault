@@ -14,6 +14,7 @@ import {
   getCloudVaultKeyEnvelope,
   storeCloudEncryptedItem,
   storeCloudVaultKeyEnvelope,
+  VaultAlreadyExistsError,
 } from "@/lib/vault-api";
 import { purgeLegacyCache } from "@/lib/vault-legacy-cache";
 import {
@@ -37,11 +38,12 @@ import type {
   VaultKeyEnvelope,
 } from "@/types/vault";
 
-type VaultStatus = "loading" | "new" | "locked" | "unlocked";
+type VaultStatus = "loading" | "new" | "locked" | "unlocked" | "unavailable";
 type SyncStatus = "syncing" | "synced" | "offline";
 
 const MAX_FILE_SIZE = 25 * 1024 * 1024;
 const AUTO_LOCK_MS = 10 * 60 * 1000;
+const MAX_HYDRATE_RETRIES = 3;
 const TRASH_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
 function reconcileEncryptedItems(
@@ -75,6 +77,7 @@ export function useVault(userId: string) {
   const [data, setData] = useState<VaultData | null>(null);
   const [error, setError] = useState("");
   const [syncStatus, setSyncStatus] = useState<SyncStatus>("syncing");
+  const [hydrateAttempt, setHydrateAttempt] = useState(0);
   const keyRef = useRef<CryptoKey | null>(null);
   const envelopeRef = useRef<VaultKeyEnvelope | null>(null);
 
@@ -101,7 +104,8 @@ export function useVault(userId: string) {
         if (!isCancelled) {
           envelopeRef.current = localEnvelope;
           setSyncStatus("offline");
-          setStatus(localEnvelope ? "locked" : "new");
+          // Only a confirmed "no vault" response may lead to setup; an error could hide a vault.
+          setStatus(localEnvelope ? "locked" : "unavailable");
         }
       }
     }
@@ -109,7 +113,17 @@ export function useVault(userId: string) {
     return () => {
       isCancelled = true;
     };
-  }, [userId]);
+  }, [hydrateAttempt, userId]);
+
+  const canRetry = hydrateAttempt < MAX_HYDRATE_RETRIES;
+
+  function retry(): void {
+    if (!canRetry) {
+      return;
+    }
+    setStatus("loading");
+    setHydrateAttempt((attempt) => attempt + 1);
+  }
 
   const lock = useCallback((): void => {
     keyRef.current = null;
@@ -148,7 +162,12 @@ export function useVault(userId: string) {
       setStatus("unlocked");
       setSyncStatus("synced");
       return true;
-    } catch {
+    } catch (setupError) {
+      if (setupError instanceof VaultAlreadyExistsError) {
+        retry();
+        setError("This account already has a vault. Unlock it with its passphrase.");
+        return false;
+      }
       setError("An internet connection is required to create the vault.");
       return false;
     }
@@ -347,6 +366,7 @@ export function useVault(userId: string) {
 
   return {
     addDocument,
+    canRetry,
     clearLocalData,
     data,
     downloadDocument,
@@ -355,6 +375,7 @@ export function useVault(userId: string) {
     moveToTrash,
     permanentlyDelete,
     restoreItem,
+    retry,
     saveItem,
     setup,
     status,

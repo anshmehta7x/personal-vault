@@ -43,7 +43,8 @@ export async function PUT(request: Request): Promise<Response> {
     return Response.json({ error: "Invalid vault key envelope" }, { status: 400 });
   }
   const envelope = result.data;
-  await sql`
+  // Create-only: an existing envelope holds the only wrapped copy of the vault key.
+  const rows = await sql`
     INSERT INTO vaults (user_id, crypto_version, kdf_salt, wrap_iv, wrapped_key)
     VALUES (
       ${userId},
@@ -52,13 +53,11 @@ export async function PUT(request: Request): Promise<Response> {
       ${envelope.wrapIv},
       ${envelope.wrappedKey}
     )
-    ON CONFLICT (user_id)
-    DO UPDATE SET
-      crypto_version = EXCLUDED.crypto_version,
-      kdf_salt = EXCLUDED.kdf_salt,
-      wrap_iv = EXCLUDED.wrap_iv,
-      wrapped_key = EXCLUDED.wrapped_key,
-      updated_at = NOW()
+    ON CONFLICT (user_id) DO NOTHING
+    RETURNING user_id
   `;
+  if (!rows.length) {
+    return Response.json({ error: "This account already has a vault" }, { status: 409 });
+  }
   return Response.json({ saved: true });
 }
