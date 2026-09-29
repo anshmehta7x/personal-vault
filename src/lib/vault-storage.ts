@@ -1,4 +1,14 @@
-import type { VaultDocument, VaultRecord } from "@/types/vault";
+import type {
+  EncryptedVaultItem,
+  VaultDocument,
+  VaultMetadata,
+  VaultRecord,
+} from "@/types/vault";
+
+import {
+  getCloudVaultMetadata,
+  storeCloudVaultRecord as storeCloudVaultEnvelope,
+} from "./vault-api";
 
 import {
   base64ToBytes,
@@ -8,6 +18,7 @@ import {
 } from "./vault-crypto";
 
 const VAULT_KEY = "locker:vault";
+const VAULT_ITEMS_KEY = "locker:vault-items:v2";
 const DATABASE_NAME = "locker-documents";
 const STORE_NAME = "documents";
 
@@ -17,23 +28,58 @@ interface StoredDocument {
   iv: Uint8Array<ArrayBuffer>;
 }
 
-export function getVaultRecord(): VaultRecord | null {
+function isVaultRecord(value: unknown): value is VaultRecord {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const record = value as Partial<VaultRecord>;
+  return record.version === 1
+    && typeof record.updatedAt === "string"
+    && typeof record.salt === "string"
+    && typeof record.wrapIv === "string"
+    && typeof record.wrappedKey === "string"
+    && typeof record.dataIv === "string"
+    && typeof record.encryptedData === "string";
+}
+
+export function getLocalVaultMetadata(): VaultMetadata | null {
   const value = localStorage.getItem(VAULT_KEY);
   if (!value) {
     return null;
   }
   try {
-    const record = JSON.parse(value) as VaultRecord;
-    if (record.version !== 1) {
+    const parsed = JSON.parse(value) as unknown;
+    if (isVaultRecord(parsed)) {
+      return {
+        record: {
+          ...parsed,
+          updatedAt: parsed.updatedAt ?? new Date(0).toISOString(),
+        },
+        storageVersion: 1,
+        migratedAt: null,
+      };
+    }
+    const metadata = parsed as Partial<VaultMetadata>;
+    if (!isVaultRecord(metadata.record)
+      || (metadata.storageVersion !== 1 && metadata.storageVersion !== 2)) {
       return null;
     }
     return {
-      ...record,
-      updatedAt: record.updatedAt ?? new Date(0).toISOString(),
+      record: metadata.record,
+      storageVersion: metadata.storageVersion,
+      migratedAt: typeof metadata.migratedAt === "string" ? metadata.migratedAt : null,
     };
   } catch {
     return null;
   }
+}
+
+export function storeLocalVaultMetadata(metadata: VaultMetadata): void {
+  localStorage.setItem(VAULT_KEY, JSON.stringify(metadata));
+}
+
+export function getVaultRecord(): VaultRecord | null {
+  return getLocalVaultMetadata()?.record ?? null;
 }
 
 export function storeVaultRecord(record: VaultRecord): void {
@@ -41,23 +87,56 @@ export function storeVaultRecord(record: VaultRecord): void {
 }
 
 export async function getCloudVaultRecord(): Promise<VaultRecord | null> {
-  const response = await fetch("/api/vault", { cache: "no-store" });
-  if (!response.ok) {
-    throw new Error("Could not load the cloud vault.");
-  }
-  const body = await response.json() as { record: VaultRecord | null };
-  return body.record;
+  return (await getCloudVaultMetadata())?.record ?? null;
 }
 
 export async function storeCloudVaultRecord(record: VaultRecord): Promise<void> {
-  const response = await fetch("/api/vault", {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(record),
-  });
-  if (!response.ok) {
-    throw new Error("Could not sync the encrypted vault.");
+  await storeCloudVaultEnvelope(record, 1);
+}
+
+function isEncryptedVaultItem(value: unknown): value is EncryptedVaultItem {
+  if (!value || typeof value !== "object") {
+    return false;
   }
+  const item = value as Partial<EncryptedVaultItem>;
+  return typeof item.itemId === "string"
+    && item.cryptoVersion === 1
+    && typeof item.encryptionIv === "string"
+    && typeof item.encryptedPayload === "string"
+    && typeof item.createdAt === "string"
+    && typeof item.updatedAt === "string"
+    && (typeof item.deletedAt === "string" || item.deletedAt === null);
+}
+
+export function getLocalEncryptedItems(): EncryptedVaultItem[] {
+  const value = localStorage.getItem(VAULT_ITEMS_KEY);
+  if (!value) {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return Array.isArray(parsed) && parsed.every(isEncryptedVaultItem) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+export function storeLocalEncryptedItems(items: EncryptedVaultItem[]): void {
+  localStorage.setItem(VAULT_ITEMS_KEY, JSON.stringify(items));
+}
+
+export function upsertLocalEncryptedItem(item: EncryptedVaultItem): void {
+  const current = getLocalEncryptedItems();
+  const exists = current.some((candidate) => candidate.itemId === item.itemId);
+  storeLocalEncryptedItems(exists
+    ? current.map((candidate) => candidate.itemId === item.itemId ? item : candidate)
+    : [item, ...current]);
+}
+
+export function deleteLocalEncryptedItem(itemId: string): void {
+  storeLocalEncryptedItems(
+    getLocalEncryptedItems().filter((item) => item.itemId !== itemId),
+  );
 }
 
 function openDocumentDatabase(): Promise<IDBDatabase> {
