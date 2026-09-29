@@ -1,11 +1,20 @@
 import { argon2id } from "hash-wasm";
 
-import type { VaultData, VaultRecord } from "@/types/vault";
+import type {
+  EncryptedVaultItem,
+  VaultData,
+  VaultItem,
+  VaultRecord,
+} from "@/types/vault";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 const WRAP_CONTEXT = encoder.encode("locker:v1:vault-key");
 const DATA_CONTEXT = encoder.encode("locker:v1:vault-data");
+
+function getItemContext(itemId: string): Uint8Array<ArrayBuffer> {
+  return encoder.encode(`locker:v2:item:${itemId}`);
+}
 
 export function bytesToBase64(bytes: Uint8Array): string {
   let binary = "";
@@ -114,17 +123,7 @@ export async function unlockVault(
   record: VaultRecord,
   passphrase: string,
 ): Promise<{ data: VaultData; key: CryptoKey }> {
-  const passphraseKey = await derivePassphraseKey(passphrase, base64ToBytes(record.salt));
-  const rawKey = await decrypt(
-    passphraseKey,
-    record.wrappedKey,
-    record.wrapIv,
-    WRAP_CONTEXT,
-  );
-  const key = await crypto.subtle.importKey("raw", rawKey, "AES-GCM", true, [
-    "encrypt",
-    "decrypt",
-  ]);
+  const key = await unlockVaultKey(record, passphrase);
   const plainText = await decrypt(
     key,
     record.encryptedData,
@@ -133,6 +132,60 @@ export async function unlockVault(
   );
   const data = JSON.parse(decoder.decode(plainText)) as VaultData;
   return { data, key };
+}
+
+export async function unlockVaultKey(
+  record: VaultRecord,
+  passphrase: string,
+): Promise<CryptoKey> {
+  const passphraseKey = await derivePassphraseKey(passphrase, base64ToBytes(record.salt));
+  const rawKey = await decrypt(
+    passphraseKey,
+    record.wrappedKey,
+    record.wrapIv,
+    WRAP_CONTEXT,
+  );
+  return crypto.subtle.importKey("raw", rawKey, "AES-GCM", true, [
+    "encrypt",
+    "decrypt",
+  ]);
+}
+
+export async function encryptVaultItem(
+  key: CryptoKey,
+  item: VaultItem,
+): Promise<EncryptedVaultItem> {
+  const encrypted = await encrypt(
+    key,
+    encoder.encode(JSON.stringify(item)),
+    getItemContext(item.id),
+  );
+  return {
+    itemId: item.id,
+    cryptoVersion: 1,
+    encryptionIv: encrypted.iv,
+    encryptedPayload: encrypted.cipherText,
+    createdAt: item.createdAt,
+    updatedAt: item.updatedAt,
+    deletedAt: item.deletedAt,
+  };
+}
+
+export async function decryptVaultItem(
+  key: CryptoKey,
+  encryptedItem: EncryptedVaultItem,
+): Promise<VaultItem> {
+  const plainText = await decrypt(
+    key,
+    encryptedItem.encryptedPayload,
+    encryptedItem.encryptionIv,
+    getItemContext(encryptedItem.itemId),
+  );
+  const item = JSON.parse(decoder.decode(plainText)) as VaultItem;
+  if (item.id !== encryptedItem.itemId) {
+    throw new Error("Encrypted vault item ID does not match its row.");
+  }
+  return item;
 }
 
 export async function sealVault(

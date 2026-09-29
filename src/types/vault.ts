@@ -42,6 +42,24 @@ export interface VaultRecord {
   encryptedData: string;
 }
 
+export type VaultStorageVersion = 1 | 2;
+
+export interface VaultMetadata {
+  record: VaultRecord;
+  storageVersion: VaultStorageVersion;
+  migratedAt: string | null;
+}
+
+export interface EncryptedVaultItem {
+  itemId: string;
+  cryptoVersion: 1;
+  encryptionIv: string;
+  encryptedPayload: string;
+  createdAt: string;
+  updatedAt: string;
+  deletedAt: string | null;
+}
+
 export interface VaultTemplate {
   name: string;
   category: VaultCategory;
