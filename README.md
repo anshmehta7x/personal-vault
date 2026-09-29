@@ -42,21 +42,29 @@ the client.
 1. The browser derives a 256-bit key from the vault passphrase with Argon2id using a random
    128-bit salt, 64 MiB of memory, three iterations, and one lane.
 2. The browser generates a random AES-256-GCM vault key.
-3. The passphrase-derived key encrypts the vault key. Only this wrapped key and its parameters are
-   stored by the server.
+3. The passphrase-derived key encrypts the vault key. The server stores only the wrapped key, its
+   salt, and its IV; the Argon2id parameters are fixed in the client code.
 4. Each vault item is encrypted with the vault key, a fresh 96-bit IV, and item-ID-bound additional
    authenticated data.
 5. Documents are encrypted with the vault key and a fresh 96-bit IV before upload.
 
-The unwrapped vault key is held only in memory. Locker clears it on explicit lock, sign-out, page
-closure, or after ten minutes without interaction. Encrypted item and document caches support
-limited offline access.
+The unwrapped vault key is held only in memory as a non-extractable Web Crypto key. Locker clears
+it on explicit lock, sign-out, session expiry, page closure, or after ten minutes without
+interaction. Each account's encrypted item and document caches are stored separately in the
+browser and deleted on sign-out, so offline access lasts only while signed in.
 
 ## Security properties and limitations
 
 - The database and object store do not contain the vault passphrase, plaintext vault key, item
   plaintext, or document plaintext.
-- AES-GCM authenticates encrypted content and rejects modified or reassigned item ciphertext.
+- AES-GCM authenticates all encrypted content. Item ciphertext is also bound to its item ID, so a
+  modified or reassigned item is rejected. Document ciphertext is not bound to an ID, and neither
+  detects the server returning an older valid version.
+- A strict nonce-based Content Security Policy and HSTS limit where scripts load from and where the
+  page can send data.
+- A vault key envelope can be created once; the API never overwrites an existing one.
+- Items that fail to decrypt are hidden and counted instead of blocking the rest of the vault.
+- The 25 MB document limit is enforced by signing the exact upload size into the storage URL.
 - Account authentication and vault decryption use separate credentials.
 - Sensitive-field masking is a UI feature; every item field is encrypted regardless of its flag.
 - Losing the vault passphrase currently means losing access to the vault. There is no recovery key.
@@ -145,13 +153,18 @@ BETTER_AUTH_ORIGIN=http://localhost:3000
 BETTER_AUTH_RP_ID=localhost
 ```
 
-Never reuse secrets between development and production or commit their values.
+Never reuse secrets between development and production or commit their values. `neon env pull`
+writes credentials for the linked branch, so link a separate development branch before pulling
+for local work; otherwise local testing reads and writes production data.
 
 Run locally:
 
 ```bash
 npm run dev
 ```
+
+Passkeys are bound to the RP ID, so a passkey registered on the production domain does not work on
+`localhost`. Register a separate passkey locally, or sign in with the account password.
 
 ### Registration
 
