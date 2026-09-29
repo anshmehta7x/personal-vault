@@ -87,38 +87,16 @@ Apply each migration once:
 neon psql production -- -v ON_ERROR_STOP=1 -f migrations/0001_create_vaults.sql
 neon psql production -- -v ON_ERROR_STOP=1 -f migrations/0002_better_auth.sql
 neon psql production -- -v ON_ERROR_STOP=1 -f migrations/0003_create_vault_items.sql
+neon psql production -- -v ON_ERROR_STOP=1 -f migrations/0004_add_vault_key_columns.sql
+neon psql production -- -v ON_ERROR_STOP=1 -f migrations/0005_drop_legacy_vault_columns.sql
 ```
 
 The authentication migration creates the passkey tables and installs a database trigger that
 prevents creation of more than one owner. The third migration adds independently encrypted vault
 item rows.
 
-## Upgrade an existing vault to per-item storage
-
-The committed [migration file](migrations/0003_create_vault_items.sql) can also be pasted directly
-into the Neon SQL console. Apply it before deploying the application code. It only adds schema; it
-does not decrypt or delete the existing encrypted vault.
-
-1. Back up the current `vaults.encrypted_record` value from the Neon dashboard.
-2. Apply `migrations/0003_create_vault_items.sql`.
-3. Deploy the application commit.
-4. Sign in and unlock the vault once while online. The browser migrates and verifies every item.
-5. Check every visible item and its custom fields before editing anything.
-6. Run this read-only query in the Neon SQL console:
-
-```sql
-SELECT
-  v.storage_version,
-  v.migrated_at,
-  COUNT(vi.item_id) AS item_count
-FROM vaults v
-LEFT JOIN vault_items vi ON vi.user_id = v.user_id
-GROUP BY v.id, v.storage_version, v.migrated_at;
-```
-
-Expect one row with `storage_version = 2`, a non-null `migrated_at`, and an `item_count`
-equal to all vault items, including trash. Do not delete `vaults.encrypted_record`; it remains the
-wrapped-key envelope and retains the original encrypted blob as a recovery copy.
+For an existing deployment, apply migration 0004 before deploying the matching application code.
+After confirming the vault unlocks, apply migration 0005.
 
 ### 5. Run locally
 

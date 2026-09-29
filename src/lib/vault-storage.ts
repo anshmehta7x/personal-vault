@@ -1,8 +1,7 @@
 import type {
   EncryptedVaultItem,
   VaultDocument,
-  VaultMetadata,
-  VaultRecord,
+  VaultKeyEnvelope,
 } from "@/types/vault";
 
 import {
@@ -12,7 +11,7 @@ import {
   encryptDocument,
 } from "./vault-crypto";
 
-const VAULT_KEY = "locker:vault";
+const VAULT_KEY = "locker:vault-key:v1";
 const VAULT_ITEMS_KEY = "locker:vault-items:v2";
 const DATABASE_NAME = "locker-documents";
 const STORE_NAME = "documents";
@@ -23,54 +22,32 @@ interface StoredDocument {
   iv: Uint8Array<ArrayBuffer>;
 }
 
-function isVaultRecord(value: unknown): value is VaultRecord {
+function isVaultKeyEnvelope(value: unknown): value is VaultKeyEnvelope {
   if (!value || typeof value !== "object") {
     return false;
   }
-  const record = value as Partial<VaultRecord>;
-  return record.version === 1
-    && typeof record.updatedAt === "string"
-    && typeof record.salt === "string"
-    && typeof record.wrapIv === "string"
-    && typeof record.wrappedKey === "string"
-    && typeof record.dataIv === "string"
-    && typeof record.encryptedData === "string";
+  const envelope = value as Partial<VaultKeyEnvelope>;
+  return envelope.cryptoVersion === 1
+    && typeof envelope.kdfSalt === "string"
+    && typeof envelope.wrapIv === "string"
+    && typeof envelope.wrappedKey === "string";
 }
 
-export function getLocalVaultMetadata(): VaultMetadata | null {
+export function getLocalVaultKeyEnvelope(): VaultKeyEnvelope | null {
   const value = localStorage.getItem(VAULT_KEY);
   if (!value) {
     return null;
   }
   try {
     const parsed = JSON.parse(value) as unknown;
-    if (isVaultRecord(parsed)) {
-      return {
-        record: {
-          ...parsed,
-          updatedAt: parsed.updatedAt ?? new Date(0).toISOString(),
-        },
-        storageVersion: 1,
-        migratedAt: null,
-      };
-    }
-    const metadata = parsed as Partial<VaultMetadata>;
-    if (!isVaultRecord(metadata.record)
-      || (metadata.storageVersion !== 1 && metadata.storageVersion !== 2)) {
-      return null;
-    }
-    return {
-      record: metadata.record,
-      storageVersion: metadata.storageVersion,
-      migratedAt: typeof metadata.migratedAt === "string" ? metadata.migratedAt : null,
-    };
+    return isVaultKeyEnvelope(parsed) ? parsed : null;
   } catch {
     return null;
   }
 }
 
-export function storeLocalVaultMetadata(metadata: VaultMetadata): void {
-  localStorage.setItem(VAULT_KEY, JSON.stringify(metadata));
+export function storeLocalVaultKeyEnvelope(envelope: VaultKeyEnvelope): void {
+  localStorage.setItem(VAULT_KEY, JSON.stringify(envelope));
 }
 
 function isEncryptedVaultItem(value: unknown): value is EncryptedVaultItem {

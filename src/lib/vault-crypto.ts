@@ -4,13 +4,12 @@ import type {
   EncryptedVaultItem,
   VaultData,
   VaultItem,
-  VaultRecord,
+  VaultKeyEnvelope,
 } from "@/types/vault";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 const WRAP_CONTEXT = encoder.encode("locker:v1:vault-key");
-const DATA_CONTEXT = encoder.encode("locker:v1:vault-data");
 
 function getItemContext(itemId: string): Uint8Array<ArrayBuffer> {
   return encoder.encode(`locker:v2:item:${itemId}`);
@@ -84,14 +83,10 @@ async function decrypt(
   );
 }
 
-async function encryptData(key: CryptoKey, data: VaultData) {
-  return encrypt(key, encoder.encode(JSON.stringify(data)), DATA_CONTEXT);
-}
-
 export async function createVault(passphrase: string): Promise<{
   data: VaultData;
+  envelope: VaultKeyEnvelope;
   key: CryptoKey;
-  record: VaultRecord;
 }> {
   const salt = randomBytes(16);
   const passphraseKey = await derivePassphraseKey(passphrase, salt);
@@ -102,47 +97,28 @@ export async function createVault(passphrase: string): Promise<{
   const rawKey = await crypto.subtle.exportKey("raw", key);
   const wrapped = await encrypt(passphraseKey, rawKey, WRAP_CONTEXT);
   const data: VaultData = { items: [] };
-  const encrypted = await encryptData(key, data);
 
   return {
     data,
-    key,
-    record: {
-      version: 1,
-      updatedAt: new Date().toISOString(),
-      salt: bytesToBase64(salt),
+    envelope: {
+      cryptoVersion: 1,
+      kdfSalt: bytesToBase64(salt),
       wrapIv: wrapped.iv,
       wrappedKey: wrapped.cipherText,
-      dataIv: encrypted.iv,
-      encryptedData: encrypted.cipherText,
     },
+    key,
   };
 }
 
-export async function unlockVault(
-  record: VaultRecord,
-  passphrase: string,
-): Promise<{ data: VaultData; key: CryptoKey }> {
-  const key = await unlockVaultKey(record, passphrase);
-  const plainText = await decrypt(
-    key,
-    record.encryptedData,
-    record.dataIv,
-    DATA_CONTEXT,
-  );
-  const data = JSON.parse(decoder.decode(plainText)) as VaultData;
-  return { data, key };
-}
-
 export async function unlockVaultKey(
-  record: VaultRecord,
+  envelope: VaultKeyEnvelope,
   passphrase: string,
 ): Promise<CryptoKey> {
-  const passphraseKey = await derivePassphraseKey(passphrase, base64ToBytes(record.salt));
+  const passphraseKey = await derivePassphraseKey(passphrase, base64ToBytes(envelope.kdfSalt));
   const rawKey = await decrypt(
     passphraseKey,
-    record.wrappedKey,
-    record.wrapIv,
+    envelope.wrappedKey,
+    envelope.wrapIv,
     WRAP_CONTEXT,
   );
   return crypto.subtle.importKey("raw", rawKey, "AES-GCM", true, [
@@ -186,20 +162,6 @@ export async function decryptVaultItem(
     throw new Error("Encrypted vault item ID does not match its row.");
   }
   return item;
-}
-
-export async function sealVault(
-  record: VaultRecord,
-  key: CryptoKey,
-  data: VaultData,
-): Promise<VaultRecord> {
-  const encrypted = await encryptData(key, data);
-  return {
-    ...record,
-    updatedAt: new Date().toISOString(),
-    dataIv: encrypted.iv,
-    encryptedData: encrypted.cipherText,
-  };
 }
 
 export async function encryptDocument(

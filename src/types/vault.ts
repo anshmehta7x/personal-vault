@@ -32,22 +32,11 @@ export interface VaultData {
   items: VaultItem[];
 }
 
-export interface VaultRecord {
-  version: 1;
-  updatedAt: string;
-  salt: string;
+export interface VaultKeyEnvelope {
+  cryptoVersion: 1;
+  kdfSalt: string;
   wrapIv: string;
   wrappedKey: string;
-  dataIv: string;
-  encryptedData: string;
-}
-
-export type VaultStorageVersion = 1 | 2;
-
-export interface VaultMetadata {
-  record: VaultRecord;
-  storageVersion: VaultStorageVersion;
-  migratedAt: string | null;
 }
 
 export interface EncryptedVaultItem {

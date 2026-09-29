@@ -6,26 +6,24 @@ import {
   createVault,
   decryptVaultItem,
   encryptVaultItem,
-  unlockVault,
   unlockVaultKey,
 } from "@/lib/vault-crypto";
 import {
   deleteCloudEncryptedItem,
   getCloudEncryptedItems,
-  getCloudVaultMetadata,
+  getCloudVaultKeyEnvelope,
   storeCloudEncryptedItem,
-  storeCloudVaultRecord,
+  storeCloudVaultKeyEnvelope,
 } from "@/lib/vault-api";
-import { migrateLegacyVault } from "@/lib/vault-migration";
 import {
   deleteEncryptedDocument,
   deleteLocalEncryptedItem,
   getDecryptedDocument,
   getLocalEncryptedItems,
-  getLocalVaultMetadata,
+  getLocalVaultKeyEnvelope,
   hasLocalEncryptedItemCache,
   storeLocalEncryptedItems,
-  storeLocalVaultMetadata,
+  storeLocalVaultKeyEnvelope,
   storeEncryptedDocument,
   upsertLocalEncryptedItem,
 } from "@/lib/vault-storage";
@@ -34,7 +32,7 @@ import type {
   VaultData,
   VaultDocument,
   VaultItem,
-  VaultMetadata,
+  VaultKeyEnvelope,
 } from "@/types/vault";
 
 type VaultStatus = "loading" | "new" | "locked" | "unlocked";
@@ -67,38 +65,32 @@ export function useVault() {
   const [error, setError] = useState("");
   const [syncStatus, setSyncStatus] = useState<SyncStatus>("syncing");
   const keyRef = useRef<CryptoKey | null>(null);
-  const metadataRef = useRef<VaultMetadata | null>(null);
+  const envelopeRef = useRef<VaultKeyEnvelope | null>(null);
 
   useEffect(() => {
     let isCancelled = false;
     async function hydrate(): Promise<void> {
-      const localMetadata = getLocalVaultMetadata();
+      const localEnvelope = getLocalVaultKeyEnvelope();
       try {
-        const cloudMetadata = await getCloudVaultMetadata();
+        const cloudEnvelope = await getCloudVaultKeyEnvelope();
         if (isCancelled) {
           return;
         }
-        let metadata = cloudMetadata;
-        if (!cloudMetadata && localMetadata) {
-          await storeCloudVaultRecord(localMetadata.record, localMetadata.storageVersion);
-          metadata = localMetadata;
-        } else if (cloudMetadata?.storageVersion === 1
-          && localMetadata?.storageVersion === 1
-          && localMetadata.record.updatedAt > cloudMetadata.record.updatedAt) {
-          await storeCloudVaultRecord(localMetadata.record, 1);
-          metadata = localMetadata;
+        const envelope = cloudEnvelope ?? localEnvelope;
+        if (!cloudEnvelope && localEnvelope) {
+          await storeCloudVaultKeyEnvelope(localEnvelope);
         }
-        if (metadata) {
-          storeLocalVaultMetadata(metadata);
+        if (envelope) {
+          storeLocalVaultKeyEnvelope(envelope);
         }
-        metadataRef.current = metadata;
+        envelopeRef.current = envelope;
         setSyncStatus("synced");
-        setStatus(metadata ? "locked" : "new");
+        setStatus(envelope ? "locked" : "new");
       } catch {
         if (!isCancelled) {
-          metadataRef.current = localMetadata;
+          envelopeRef.current = localEnvelope;
           setSyncStatus("offline");
-          setStatus(localMetadata ? "locked" : "new");
+          setStatus(localEnvelope ? "locked" : "new");
         }
       }
     }
@@ -112,7 +104,7 @@ export function useVault() {
     keyRef.current = null;
     setData(null);
     setError("");
-    setStatus(metadataRef.current ? "locked" : "new");
+    setStatus(envelopeRef.current ? "locked" : "new");
   }, []);
 
   useEffect(() => {
@@ -136,16 +128,10 @@ export function useVault() {
     setError("");
     try {
       const created = await createVault(passphrase);
-      const migratedAt = new Date().toISOString();
-      const metadata: VaultMetadata = {
-        record: created.record,
-        storageVersion: 2,
-        migratedAt,
-      };
-      await storeCloudVaultRecord(created.record, 2);
-      storeLocalVaultMetadata(metadata);
+      await storeCloudVaultKeyEnvelope(created.envelope);
+      storeLocalVaultKeyEnvelope(created.envelope);
       storeLocalEncryptedItems([]);
-      metadataRef.current = metadata;
+      envelopeRef.current = created.envelope;
       keyRef.current = created.key;
       setData(created.data);
       setStatus("unlocked");
@@ -158,75 +144,49 @@ export function useVault() {
   }
 
   async function unlock(passphrase: string): Promise<boolean> {
-    const metadata = metadataRef.current;
-    if (!metadata) {
+    const envelope = envelopeRef.current;
+    if (!envelope) {
       return false;
     }
     setError("");
     let key: CryptoKey;
-    let nextData: VaultData;
-    if (metadata.storageVersion === 1) {
-      let unlocked: Awaited<ReturnType<typeof unlockVault>>;
+    try {
+      key = await unlockVaultKey(envelope, passphrase);
+    } catch {
+      setError("That vault passphrase did not work.");
+      return false;
+    }
+    const localItems = getLocalEncryptedItems();
+    let encryptedItems: EncryptedVaultItem[];
+    try {
+      const cloudItems = await getCloudEncryptedItems();
+      const reconciled = reconcileEncryptedItems(localItems, cloudItems);
+      encryptedItems = reconciled.items;
       try {
-        unlocked = await unlockVault(metadata.record, passphrase);
-      } catch {
-        setError("That vault passphrase did not work.");
-        return false;
-      }
-      try {
-        const migrated = await migrateLegacyVault(unlocked.data, unlocked.key);
-        const nextMetadata: VaultMetadata = {
-          ...metadata,
-          storageVersion: 2,
-          migratedAt: migrated.migratedAt,
-        };
-        storeLocalVaultMetadata(nextMetadata);
-        metadataRef.current = nextMetadata;
-        key = unlocked.key;
-        nextData = unlocked.data;
+        await Promise.all(reconciled.itemsToUpload.map(storeCloudEncryptedItem));
         setSyncStatus("synced");
       } catch {
-        setError("Could not migrate the encrypted vault. Check your connection and try again.");
-        return false;
-      }
-    } else {
-      try {
-        key = await unlockVaultKey(metadata.record, passphrase);
-      } catch {
-        setError("That vault passphrase did not work.");
-        return false;
-      }
-      const localItems = getLocalEncryptedItems();
-      let encryptedItems: EncryptedVaultItem[];
-      try {
-        const cloudItems = await getCloudEncryptedItems();
-        const reconciled = reconcileEncryptedItems(localItems, cloudItems);
-        encryptedItems = reconciled.items;
-        try {
-          await Promise.all(reconciled.itemsToUpload.map(storeCloudEncryptedItem));
-          setSyncStatus("synced");
-        } catch {
-          setSyncStatus("offline");
-        }
-      } catch {
-        if (!hasLocalEncryptedItemCache()) {
-          setError("Could not load encrypted vault items. Check your connection and try again.");
-          return false;
-        }
-        encryptedItems = localItems;
         setSyncStatus("offline");
       }
-      try {
-        nextData = {
-          items: await Promise.all(
-            encryptedItems.map((item) => decryptVaultItem(key, item)),
-          ),
-        };
-        storeLocalEncryptedItems(encryptedItems);
-      } catch {
-        setError("Could not decrypt the stored vault items.");
+    } catch {
+      if (!hasLocalEncryptedItemCache()) {
+        setError("Could not load encrypted vault items. Check your connection and try again.");
         return false;
       }
+      encryptedItems = localItems;
+      setSyncStatus("offline");
+    }
+    let nextData: VaultData;
+    try {
+      nextData = {
+        items: await Promise.all(
+          encryptedItems.map((item) => decryptVaultItem(key, item)),
+        ),
+      };
+      storeLocalEncryptedItems(encryptedItems);
+    } catch {
+      setError("Could not decrypt the stored vault items.");
+      return false;
     }
     keyRef.current = key;
     setData(nextData);

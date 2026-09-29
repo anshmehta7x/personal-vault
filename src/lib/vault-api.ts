@@ -1,30 +1,25 @@
 import type {
   EncryptedVaultItem,
-  VaultMetadata,
-  VaultRecord,
-  VaultStorageVersion,
+  VaultKeyEnvelope,
 } from "@/types/vault";
 
-export async function getCloudVaultMetadata(): Promise<VaultMetadata | null> {
+export async function getCloudVaultKeyEnvelope(): Promise<VaultKeyEnvelope | null> {
   const response = await fetch("/api/vault", { cache: "no-store" });
   if (!response.ok) {
     throw new Error("Could not load the cloud vault.");
   }
-  const body = await response.json() as { metadata: VaultMetadata | null };
-  return body.metadata;
+  const body = await response.json() as { keyEnvelope: VaultKeyEnvelope | null };
+  return body.keyEnvelope;
 }
 
-export async function storeCloudVaultRecord(
-  record: VaultRecord,
-  storageVersion: VaultStorageVersion,
-): Promise<void> {
+export async function storeCloudVaultKeyEnvelope(envelope: VaultKeyEnvelope): Promise<void> {
   const response = await fetch("/api/vault", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ record, storageVersion }),
+    body: JSON.stringify(envelope),
   });
   if (!response.ok) {
-    throw new Error("Could not sync the encrypted vault envelope.");
+    throw new Error("Could not sync the vault key envelope.");
   }
 }
 
@@ -55,17 +50,4 @@ export async function deleteCloudEncryptedItem(itemId: string): Promise<void> {
   if (!response.ok) {
     throw new Error("Could not delete the encrypted vault item.");
   }
-}
-
-export async function completeCloudMigration(expectedItemIds: string[]): Promise<string> {
-  const response = await fetch("/api/vault/migration", {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ expectedItemIds }),
-  });
-  if (!response.ok) {
-    throw new Error("Could not activate per-item vault storage.");
-  }
-  const body = await response.json() as { migratedAt: string };
-  return body.migratedAt;
 }
