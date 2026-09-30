@@ -7,16 +7,19 @@ import {
   createVault,
   decryptVaultItem,
   encryptVaultItem,
+  rewrapVaultKey,
   unlockVaultKey,
 } from "@/lib/vault-crypto";
 import {
   deleteCloudEncryptedItem,
   getCloudEncryptedItems,
   getCloudVaultKeyEnvelope,
+  replaceCloudVaultKeyEnvelope,
   SessionExpiredError,
   storeCloudEncryptedItem,
   storeCloudVaultKeyEnvelope,
   VaultAlreadyExistsError,
+  VaultPassphraseConflictError,
 } from "@/lib/vault-api";
 import { purgeLegacyCache } from "@/lib/vault-legacy-cache";
 import {
@@ -290,6 +293,53 @@ export function useVault(userId: string, onSessionExpired: () => void) {
     return true;
   }
 
+  async function changePassphrase(
+    currentPassphrase: string,
+    newPassphrase: string,
+  ): Promise<boolean> {
+    const envelope = envelopeRef.current;
+    if (!envelope || !keyRef.current) {
+      return false;
+    }
+    setError("");
+    let nextEnvelope: VaultKeyEnvelope;
+    try {
+      nextEnvelope = await rewrapVaultKey(envelope, currentPassphrase, newPassphrase);
+    } catch {
+      setError("That vault passphrase did not work.");
+      return false;
+    }
+    try {
+      // The server cannot check the new envelope, so prove it opens before replacing the old one.
+      await unlockVaultKey(nextEnvelope, newPassphrase);
+    } catch {
+      setError("Could not verify the new passphrase. Your passphrase was not changed.");
+      return false;
+    }
+    try {
+      await replaceCloudVaultKeyEnvelope(envelope.wrappedKey, nextEnvelope);
+    } catch (changeError) {
+      if (handleSessionExpired(changeError)) {
+        return false;
+      }
+      if (changeError instanceof VaultPassphraseConflictError) {
+        // Adopt the newer envelope so the next unlock uses the other device's passphrase.
+        const cloudEnvelope = await getCloudVaultKeyEnvelope().catch(() => null);
+        if (cloudEnvelope) {
+          envelopeRef.current = cloudEnvelope;
+          storeLocalVaultKeyEnvelope(userId, cloudEnvelope);
+        }
+        setError("The passphrase was changed on another device. Lock the vault and unlock it again.");
+        return false;
+      }
+      setError("An internet connection is required to change the passphrase.");
+      return false;
+    }
+    envelopeRef.current = nextEnvelope;
+    storeLocalVaultKeyEnvelope(userId, nextEnvelope);
+    return true;
+  }
+
   async function persistItem(item: VaultItem, nextItems: VaultItem[]): Promise<void> {
     const key = keyRef.current;
     if (!key) {
@@ -429,6 +479,7 @@ export function useVault(userId: string, onSessionExpired: () => void) {
   return {
     addDocument,
     canRetry,
+    changePassphrase,
     clearLocalData,
     data,
     downloadDocument,

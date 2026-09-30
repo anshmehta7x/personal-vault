@@ -5,6 +5,7 @@ import {
   Cloud,
   CloudOff,
   Fingerprint,
+  KeyRound,
   LockKeyhole,
   LogOut,
   Menu,
@@ -18,6 +19,7 @@ import { useVault } from "@/hooks/use-vault";
 import { authClient } from "@/lib/auth/client";
 import type { VaultItem } from "@/types/vault";
 
+import { ChangePassphraseDialog } from "./change-passphrase-dialog";
 import { ItemDetail } from "./item-detail";
 import { ItemEditor } from "./item-editor";
 import { ItemList } from "./item-list";
@@ -39,6 +41,7 @@ export function VaultApp({ userId }: VaultAppProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [editorItem, setEditorItem] = useState<VaultItem | null>(null);
   const [isEditorOpen, setIsEditorOpen] = useState(false);
+  const [isPassphraseDialogOpen, setIsPassphraseDialogOpen] = useState(false);
   const [showMobileDetail, setShowMobileDetail] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [securityNotice, setSecurityNotice] = useState("");
@@ -125,6 +128,17 @@ export function VaultApp({ userId }: VaultAppProps) {
       : "Passkey added.");
   }
 
+  async function changePassphrase(
+    currentPassphrase: string,
+    newPassphrase: string,
+  ): Promise<boolean> {
+    const succeeded = await vault.changePassphrase(currentPassphrase, newPassphrase);
+    if (succeeded) {
+      setSecurityNotice("Vault passphrase changed.");
+    }
+    return succeeded;
+  }
+
   async function permanentlyDelete(id: string): Promise<void> {
     if (!window.confirm("Delete this item and its documents forever?")) {
       return;
@@ -173,6 +187,15 @@ export function VaultApp({ userId }: VaultAppProps) {
             </button>
             <button onClick={() => registerPasskey("cross-platform")} type="button">
               <Usb size={16} /> Add security key
+            </button>
+            <button
+              onClick={() => {
+                setIsPassphraseDialogOpen(true);
+                setSidebarOpen(false);
+              }}
+              type="button"
+            >
+              <KeyRound size={16} /> Change passphrase
             </button>
             {vault.unreadableItemCount ? (
               <p className={styles.securityNotice}>
@@ -225,6 +248,14 @@ export function VaultApp({ userId }: VaultAppProps) {
           onAddDocument={vault.addDocument}
           onClose={() => setIsEditorOpen(false)}
           onSave={saveItem}
+        />
+      ) : null}
+
+      {isPassphraseDialogOpen ? (
+        <ChangePassphraseDialog
+          error={vault.error}
+          onChange={changePassphrase}
+          onClose={() => setIsPassphraseDialogOpen(false)}
         />
       ) : null}
     </main>

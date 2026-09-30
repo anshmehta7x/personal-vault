@@ -47,6 +47,10 @@ the client.
 4. Each vault item is encrypted with the vault key, a fresh 96-bit IV, and item-ID-bound additional
    authenticated data.
 5. Documents are encrypted with the vault key and a fresh 96-bit IV before upload.
+6. Changing the vault passphrase re-wraps the same vault key under a key derived from the new
+   passphrase and a new salt. The browser confirms the new envelope unwraps before sending it, and
+   the server replaces the envelope only if it still matches the one that was re-wrapped. Items and
+   documents are not re-encrypted.
 
 The unwrapped vault key is held only in memory as a non-extractable Web Crypto key. Locker clears
 it on explicit lock, sign-out, session expiry, page closure, or after ten minutes without
@@ -62,7 +66,11 @@ browser and deleted on sign-out, so offline access lasts only while signed in.
   detects the server returning an older valid version.
 - A strict nonce-based Content Security Policy and HSTS limit where scripts load from and where the
   page can send data.
-- A vault key envelope can be created once; the API never overwrites an existing one.
+- A vault key envelope is created once. Afterwards it can only be replaced by a passphrase change,
+  which must name the current wrapped key, so concurrent changes cannot overwrite each other.
+- A passphrase change does not rotate the vault key. Anyone holding the old passphrase and a copy
+  of the old envelope can still recover the vault key. Devices that are offline keep the old
+  envelope, and the old passphrase, until they next reach the server.
 - Items that fail to decrypt are hidden and counted instead of blocking the rest of the vault.
 - The 25 MB document limit is enforced by signing the exact upload size into the storage URL.
 - Account authentication and vault decryption use separate credentials.

@@ -1,14 +1,6 @@
-import { z } from "zod";
-
 import { getAuthenticatedUserId } from "@/lib/auth/server";
 import { sql } from "@/lib/database";
-
-const vaultKeyEnvelopeSchema = z.object({
-  cryptoVersion: z.literal(1),
-  kdfSalt: z.string().min(1),
-  wrapIv: z.string().min(1),
-  wrappedKey: z.string().min(1),
-}).strict();
+import { passphraseChangeSchema, vaultKeyEnvelopeSchema } from "@/lib/vault-schemas";
 
 export async function GET(request: Request): Promise<Response> {
   const userId = await getAuthenticatedUserId(request);
@@ -58,6 +50,33 @@ export async function PUT(request: Request): Promise<Response> {
   `;
   if (!rows.length) {
     return Response.json({ error: "This account already has a vault" }, { status: 409 });
+  }
+  return Response.json({ saved: true });
+}
+
+export async function PATCH(request: Request): Promise<Response> {
+  const userId = await getAuthenticatedUserId(request);
+  if (!userId) {
+    return Response.json({ error: "Unauthorized" }, { status: 401 });
+  }
+  const result = passphraseChangeSchema.safeParse(await request.json());
+  if (!result.success) {
+    return Response.json({ error: "Invalid passphrase change" }, { status: 400 });
+  }
+  const { expectedWrappedKey, keyEnvelope: envelope } = result.data;
+  // Compare-and-swap: only replace the envelope the client re-wrapped, never a newer one.
+  const rows = await sql`
+    UPDATE vaults
+    SET
+      crypto_version = ${envelope.cryptoVersion},
+      kdf_salt = ${envelope.kdfSalt},
+      wrap_iv = ${envelope.wrapIv},
+      wrapped_key = ${envelope.wrappedKey}
+    WHERE user_id = ${userId} AND wrapped_key = ${expectedWrappedKey}
+    RETURNING user_id
+  `;
+  if (!rows.length) {
+    return Response.json({ error: "The vault passphrase was changed elsewhere" }, { status: 409 });
   }
   return Response.json({ saved: true });
 }

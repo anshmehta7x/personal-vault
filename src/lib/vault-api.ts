@@ -10,6 +10,13 @@ export class VaultAlreadyExistsError extends Error {
   }
 }
 
+export class VaultPassphraseConflictError extends Error {
+  constructor() {
+    super("The vault passphrase was changed elsewhere.");
+    this.name = "VaultPassphraseConflictError";
+  }
+}
+
 export class SessionExpiredError extends Error {
   constructor() {
     super("Your session has expired. Sign in again.");
@@ -45,6 +52,25 @@ export async function storeCloudVaultKeyEnvelope(envelope: VaultKeyEnvelope): Pr
   }
   if (!response.ok) {
     throw new Error("Could not sync the vault key envelope.");
+  }
+}
+
+/** Replaces the envelope only if the server still holds the one identified by its wrapped key. */
+export async function replaceCloudVaultKeyEnvelope(
+  expectedWrappedKey: string,
+  envelope: VaultKeyEnvelope,
+): Promise<void> {
+  const response = await fetch("/api/vault", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ expectedWrappedKey, keyEnvelope: envelope }),
+  });
+  throwIfSessionExpired(response);
+  if (response.status === 409) {
+    throw new VaultPassphraseConflictError();
+  }
+  if (!response.ok) {
+    throw new Error("Could not change the vault passphrase.");
   }
 }
 

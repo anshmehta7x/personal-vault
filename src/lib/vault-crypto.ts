@@ -141,6 +141,37 @@ export async function unlockVaultKey(
   }
 }
 
+/** Re-wraps the existing vault key under a new passphrase; item ciphertext stays valid. */
+export async function rewrapVaultKey(
+  envelope: VaultKeyEnvelope,
+  currentPassphrase: string,
+  newPassphrase: string,
+): Promise<VaultKeyEnvelope> {
+  const currentKey = await derivePassphraseKey(
+    currentPassphrase,
+    base64ToBytes(envelope.kdfSalt),
+  );
+  const rawKey = new Uint8Array(await decrypt(
+    currentKey,
+    envelope.wrappedKey,
+    envelope.wrapIv,
+    WRAP_CONTEXT,
+  ));
+  try {
+    const salt = randomBytes(16);
+    const newKey = await derivePassphraseKey(newPassphrase, salt);
+    const wrapped = await encrypt(newKey, rawKey, WRAP_CONTEXT);
+    return {
+      cryptoVersion: 1,
+      kdfSalt: bytesToBase64(salt),
+      wrapIv: wrapped.iv,
+      wrappedKey: wrapped.cipherText,
+    };
+  } finally {
+    rawKey.fill(0);
+  }
+}
+
 export async function encryptVaultItem(
   key: CryptoKey,
   item: VaultItem,
