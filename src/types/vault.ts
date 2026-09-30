@@ -1,5 +1,7 @@
 export type VaultCategory = "identity" | "finance" | "personal" | "documents" | "other";
 
+export type VaultFilter = "all" | VaultCategory | "trash";
+
 export interface VaultField {
   id: string;
   label: string;

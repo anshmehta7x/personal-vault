@@ -11,11 +11,9 @@ import {
   UserRound,
 } from "lucide-react";
 
-import type { VaultCategory, VaultItem } from "@/types/vault";
+import type { VaultFilter, VaultItem } from "@/types/vault";
 
 import styles from "./vault.module.css";
-
-export type VaultFilter = "all" | VaultCategory | "trash";
 
 interface VaultSidebarProps {
   activeFilter: VaultFilter;

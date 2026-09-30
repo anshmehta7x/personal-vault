@@ -1,23 +1,13 @@
 "use client";
 
 import { useCallback, useMemo, useState } from "react";
-import {
-  Cloud,
-  CloudOff,
-  Fingerprint,
-  KeyRound,
-  LockKeyhole,
-  LogOut,
-  Menu,
-  Plus,
-  ShieldCheck,
-  Usb,
-} from "lucide-react";
+import { Menu, Plus, ShieldCheck } from "lucide-react";
 import { useRouter } from "next/navigation";
 
 import { useVault } from "@/hooks/use-vault";
 import { authClient } from "@/lib/auth/client";
-import type { VaultItem } from "@/types/vault";
+import { filterVaultItems } from "@/lib/vault-filter";
+import type { VaultFilter, VaultItem } from "@/types/vault";
 
 import { ChangePassphraseDialog } from "./change-passphrase-dialog";
 import { ItemDetail } from "./item-detail";
@@ -25,7 +15,8 @@ import { ItemEditor } from "./item-editor";
 import { ItemList } from "./item-list";
 import { UnlockScreen } from "./unlock-screen";
 import { VaultUnavailable } from "./vault-unavailable";
-import { VaultFilter, VaultSidebar } from "./vault-sidebar";
+import { VaultSidebar } from "./vault-sidebar";
+import { VaultSidebarFooter } from "./vault-sidebar-footer";
 import styles from "./vault.module.css";
 
 interface VaultAppProps {
@@ -46,27 +37,10 @@ export function VaultApp({ userId }: VaultAppProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [securityNotice, setSecurityNotice] = useState("");
 
-  const visibleItems = useMemo(() => {
-    const normalizedQuery = query.trim().toLowerCase();
-    return (vault.data?.items ?? [])
-      .filter((item) => activeFilter === "trash" ? Boolean(item.deletedAt) : !item.deletedAt)
-      .filter((item) => (
-        activeFilter === "all" || activeFilter === "trash" || item.category === activeFilter
-      ))
-      .filter((item) => {
-        if (!normalizedQuery) {
-          return true;
-        }
-        const searchText = [
-          item.title,
-          item.notes,
-          ...item.fields.flatMap((field) => [field.label, field.value]),
-          ...item.documents.map((document) => document.name),
-        ].join(" ").toLowerCase();
-        return searchText.includes(normalizedQuery);
-      })
-      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
-  }, [activeFilter, query, vault.data?.items]);
+  const visibleItems = useMemo(
+    () => filterVaultItems(vault.data?.items ?? [], activeFilter, query),
+    [activeFilter, query, vault.data?.items],
+  );
 
   const effectiveSelectedId = visibleItems.some((item) => item.id === selectedId)
     ? selectedId
@@ -117,17 +91,6 @@ export function VaultApp({ userId }: VaultAppProps) {
     router.push("/auth");
   }
 
-  async function registerPasskey(type: "platform" | "cross-platform"): Promise<void> {
-    setSecurityNotice("Waiting for your authenticator…");
-    const result = await authClient.passkey.addPasskey({
-      name: type === "platform" ? "Personal device" : "Hardware security key",
-      authenticatorAttachment: type,
-    });
-    setSecurityNotice(result.error
-      ? result.error.message ?? "Could not add the passkey."
-      : "Passkey added.");
-  }
-
   async function changePassphrase(
     currentPassphrase: string,
     newPassphrase: string,
@@ -173,41 +136,18 @@ export function VaultApp({ userId }: VaultAppProps) {
               setShowMobileDetail(false);
             }}
           />
-          <div className={styles.sidebarFooter}>
-            <span>
-              {vault.syncStatus === "offline" ? <CloudOff size={15} /> : <Cloud size={15} />}
-              {vault.syncStatus === "syncing"
-                ? "Syncing encrypted data"
-                : vault.syncStatus === "synced"
-                  ? "Encrypted cloud sync"
-                  : "Saved locally · offline"}
-            </span>
-            <button onClick={() => registerPasskey("platform")} type="button">
-              <Fingerprint size={16} /> Add device passkey
-            </button>
-            <button onClick={() => registerPasskey("cross-platform")} type="button">
-              <Usb size={16} /> Add security key
-            </button>
-            <button
-              onClick={() => {
-                setIsPassphraseDialogOpen(true);
-                setSidebarOpen(false);
-              }}
-              type="button"
-            >
-              <KeyRound size={16} /> Change passphrase
-            </button>
-            {vault.unreadableItemCount ? (
-              <p className={styles.securityNotice}>
-                {vault.unreadableItemCount === 1
-                  ? "1 item could not be decrypted and is hidden."
-                  : `${vault.unreadableItemCount} items could not be decrypted and are hidden.`}
-              </p>
-            ) : null}
-            {securityNotice ? <p className={styles.securityNotice}>{securityNotice}</p> : null}
-            <button onClick={vault.lock} type="button"><LockKeyhole size={16} /> Lock vault</button>
-            <button onClick={signOut} type="button"><LogOut size={16} /> Sign out</button>
-          </div>
+          <VaultSidebarFooter
+            notice={securityNotice}
+            onChangePassphrase={() => {
+              setIsPassphraseDialogOpen(true);
+              setSidebarOpen(false);
+            }}
+            onLock={vault.lock}
+            onNotice={setSecurityNotice}
+            onSignOut={signOut}
+            syncStatus={vault.syncStatus}
+            unreadableItemCount={vault.unreadableItemCount}
+          />
         </div>
       </div>
 
